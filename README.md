@@ -10,6 +10,9 @@ Built from the [Minimarket design](https://claude.ai/design/p/c669afc2-b773-4717
 
 ## Running it
 
+Requires Node.js 22.13 or newer (the app uses the built-in `node:sqlite` module
+and Node's TypeScript type stripping for scripts).
+
 ```bash
 npm install && npm run seed && npm run dev
 ```
@@ -33,6 +36,11 @@ running when you reseed, restart it — it holds an open handle to the file.
 
 Set `DATABASE_PATH` to move the SQLite file (default `data/minimarket.db`), and
 `SESSION_SECRET` to something real before putting this anywhere shared.
+
+New accounts sign in with an email/password or handle/password. Google sign-in
+appears automatically when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are
+set; copy `.env.example` and register its localhost callback URL in a Google
+OAuth Web application client.
 
 ## How the market maker works
 
@@ -76,19 +84,23 @@ is per-market solvency.
 
 ## What's here
 
-- **Groups** — invite codes, per-group bankrolls, roles, season end date, prize
-  and punishment as free text. One account can be in many groups; balances and
-  markets are scoped per group.
+- **Groups** — rotating invite codes, per-group bankrolls, owner-managed admin
+  roles, season archives, prize and punishment as free text. One account can be
+  in many groups; balances and markets are scoped per group.
 - **Markets** — binary Yes/No, categories, resolution rules, close dates.
   Members propose, the admin approves (or the group turns approval off).
-  Markets close automatically at their deadline and the admin resolves them.
+  Markets close automatically at their deadline. Admins propose a result with
+  evidence, members can dispute it during a configurable review window, and
+  undisputed results finalize automatically.
 - **Trading** — buy and sell either side, live quotes with price impact and
   payout, a depth ladder showing what it costs to move the price, public
   positions, and a comment thread per market.
 - **Portfolio** — open legs with cost basis and mark-to-market, settled history
   with realized P&L, standings across the group.
-- **Admin** — approval queue, one-click resolution, invite link, stakes editor,
-  liquidity and privacy settings, member management.
+- **Admin** — approval queue, resolution review, rotating invite links, stakes
+  editor, liquidity and privacy settings, member roles, and season rollover.
+- **Notifications** — approvals, disputes, results, role changes and new
+  seasons appear in a personal inbox.
 
 Mobile-first, with the desktop trading view from the design at ≥1024px.
 
@@ -112,6 +124,5 @@ passwords with an HMAC-signed session cookie.
 
 Single SQLite file with synchronous queries: fine for the small groups this is
 built for, not for thousands of concurrent traders. Prices update on navigation
-rather than streaming — there are no websockets. And resolution is unilateral by
-design: the admin's call is final, which is the point of a group where everyone
-knows each other.
+rather than streaming — there are no websockets. A disputed result still ends
+with an admin decision; the review trail makes that decision visible to the group.

@@ -11,6 +11,9 @@ export { authenticate, createUser } from './users';
 function secret(): string {
   const s = process.env.SESSION_SECRET;
   if (s) return s;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SESSION_SECRET is required in production.');
+  }
   // Dev fallback: stable across restarts so sessions survive a reload.
   return `minimarket-dev-${process.env.DATABASE_PATH ?? 'data/minimarket.db'}`;
 }

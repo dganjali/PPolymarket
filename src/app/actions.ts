@@ -10,13 +10,19 @@ import {
   buy,
   createGroup,
   createMarket,
+  disputeResolution,
+  finalizeResolution,
   joinGroup,
+  markNotificationsRead,
   postComment,
+  proposeResolution,
   rejectMarket,
+  regenerateInviteCode,
   removeMember,
   reopenMarket,
-  resolveMarket,
   sell,
+  setMemberRole,
+  startNextSeason,
   updateGroup,
 } from '@/lib/engine';
 import type { Side } from '@/lib/amm';
@@ -28,6 +34,7 @@ export interface FormState {
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? '').trim();
 const num = (fd: FormData, k: string) => Number(fd.get(k) ?? 0);
+const safeNext = (value: string) => value.startsWith('/') && !value.startsWith('//') ? value : '/';
 
 /** Turns thrown AppErrors into form state; anything else is a real bug. */
 async function guard<T>(fn: () => Promise<T> | T): Promise<T | FormState> {
@@ -53,12 +60,13 @@ async function me() {
 export async function signupAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const handle = str(fd, 'handle');
   const name = str(fd, 'name');
+  const email = str(fd, 'email');
   const password = String(fd.get('password') ?? '');
-  const next = str(fd, 'next') || '/';
+  const next = safeNext(str(fd, 'next') || '/');
 
   let userId: number;
   try {
-    userId = createUser(handle, name, password).id;
+    userId = createUser(handle, name, password, email).id;
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Could not create that account.' };
   }
@@ -67,10 +75,10 @@ export async function signupAction(_prev: FormState, fd: FormData): Promise<Form
 }
 
 export async function loginAction(_prev: FormState, fd: FormData): Promise<FormState> {
-  const user = authenticate(str(fd, 'handle'), String(fd.get('password') ?? ''));
-  if (!user) return { error: 'Wrong handle or password.' };
+  const user = authenticate(str(fd, 'identifier'), String(fd.get('password') ?? ''));
+  if (!user) return { error: 'Wrong email, handle, or password.' };
   await setSession(user.id);
-  redirect(str(fd, 'next') || '/');
+  redirect(safeNext(str(fd, 'next') || '/'));
 }
 
 export async function logoutAction() {
@@ -127,6 +135,7 @@ export async function updateSettingsAction(_prev: FormState, fd: FormData): Prom
     updateGroup(user.id, group.id, {
       season_ends: str(fd, 'seasonEnds') || null,
       market_liquidity: Math.max(100, num(fd, 'marketLiquidity') || group.market_liquidity),
+      dispute_window_hours: Math.max(1, Math.min(168, num(fd, 'disputeWindowHours') || group.dispute_window_hours)),
       positions_public: fd.get('positionsPublic') ? 1 : 0,
       require_approval: fd.get('requireApproval') ? 1 : 0,
     }),
@@ -178,10 +187,12 @@ export async function marketAdminAction(_prev: FormState, fd: FormData): Promise
         return approveMarket(user.id, marketId);
       case 'reject':
         return rejectMarket(user.id, marketId);
-      case 'resolve-yes':
-        return resolveMarket(user.id, marketId, 'YES');
-      case 'resolve-no':
-        return resolveMarket(user.id, marketId, 'NO');
+      case 'propose-yes':
+        return proposeResolution(user.id, marketId, 'YES', str(fd, 'evidence'));
+      case 'propose-no':
+        return proposeResolution(user.id, marketId, 'NO', str(fd, 'evidence'));
+      case 'finalize':
+        return finalizeResolution(user.id, marketId);
       case 'reopen': {
         const closesAt = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 19).replace('T', ' ');
         return reopenMarket(user.id, marketId, closesAt);
@@ -196,11 +207,22 @@ export async function marketAdminAction(_prev: FormState, fd: FormData): Promise
   const done: Record<string, string> = {
     approve: 'Market is live — the group can trade it.',
     reject: 'Rejected. The seed went back to the author.',
-    'resolve-yes': 'Resolved YES. Payouts are in.',
-    'resolve-no': 'Resolved NO. Payouts are in.',
+    'propose-yes': 'YES proposed. Members can review the evidence and dispute it.',
+    'propose-no': 'NO proposed. Members can review the evidence and dispute it.',
+    finalize: 'Result finalized. Payouts are in.',
     reopen: 'Reopened for another week.',
   };
   return { ok: done[op] ?? 'Done.' };
+}
+
+export async function disputeResolutionAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const marketId = num(fd, 'marketId');
+  const res = await guard(() => disputeResolution(user.id, marketId, str(fd, 'reason')));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: 'Dispute submitted. The admins have been notified.' };
 }
 
 // ─── trading ─────────────────────────────────────────────────────────────────
@@ -251,4 +273,44 @@ export async function kickMemberAction(_prev: FormState, fd: FormData): Promise<
 
   revalidatePath(`/g/${slug}`, 'layout');
   return { ok: 'Member removed.' };
+}
+
+export async function memberRoleAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+  const role = str(fd, 'role') === 'admin' ? 'admin' : 'member';
+  const res = await guard(() => setMemberRole(user.id, group.id, num(fd, 'userId'), role));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: role === 'admin' ? 'Admin added.' : 'Admin access removed.' };
+}
+
+export async function regenerateInviteAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+  const res = await guard(() => regenerateInviteCode(user.id, group.id));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: 'Invite code rotated. Old links no longer work.' };
+}
+
+export async function markNotificationsReadAction() {
+  const user = await me();
+  markNotificationsRead(user.id);
+  revalidatePath('/notifications');
+}
+
+export async function startNextSeasonAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+  const res = await guard(() => startNextSeason(user.id, group.id, str(fd, 'seasonEnds') || null));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: `Season ${group.current_season + 1} started. Balances have been reset.` };
 }

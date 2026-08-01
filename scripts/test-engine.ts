@@ -14,18 +14,25 @@ import { rmSync } from 'node:fs';
 // modules load, so they come in through dynamic imports below.
 process.env.DATABASE_PATH = `data/test-${process.pid}-${Date.now()}.db`;
 
-const { all, get } = await import('../src/lib/db');
-const { createUser } = await import('../src/lib/users');
+const { all, db, get, run } = await import('../src/lib/db');
+const { authenticate, createUser, upsertGoogleUser } = await import('../src/lib/users');
 const {
   AppError,
   approveMarket,
   buy,
   createGroup,
   createMarket,
+  disputeResolution,
+  finalizeResolution,
   joinGroup,
+  proposeResolution,
+  regenerateInviteCode,
   rejectMarket,
   resolveMarket,
   sell,
+  setMemberRole,
+  startNextSeason,
+  sweepResolutions,
 } = await import('../src/lib/engine');
 const { marketById } = await import('../src/lib/data');
 
@@ -52,9 +59,18 @@ const at = (days: number) =>
   new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 19).replace('T', ' ');
 
 try {
-  const admin = createUser('admin', 'The Admin', 'password');
-  const a = createUser('ava', 'Ava', 'password');
-  const b = createUser('ben', 'Ben', 'password');
+  const admin = createUser('admin', 'The Admin', 'password', 'admin@example.com');
+  const a = createUser('ava', 'Ava', 'password', 'ava@example.com');
+  const b = createUser('ben', 'Ben', 'password', 'ben@example.com');
+  ok(authenticate('ADMIN@example.com', 'password')?.id === admin.id, 'email login is case-insensitive');
+  ok(authenticate('admin', 'password')?.id === admin.id, 'handle login remains supported');
+  const google = upsertGoogleUser({
+    sub: 'google-test-sub',
+    email: 'google@example.com',
+    emailVerified: true,
+    name: 'Google User',
+  });
+  ok(google.email === 'google@example.com', 'Google sign-in creates an email-backed account');
 
   const group = createGroup(admin.id, {
     name: 'Test Group',
@@ -67,6 +83,11 @@ try {
   joinGroup(b.id, group.invite_code);
 
   close(balance(a.id, group.id), 1000, 'joining grants the starting bankroll');
+  setMemberRole(admin.id, group.id, a.id, 'admin');
+  ok(get<{ role: string }>('SELECT role FROM memberships WHERE user_id = ? AND group_id = ?', a.id, group.id)!.role === 'admin', 'owners can add community admins');
+  setMemberRole(admin.id, group.id, a.id, 'member');
+  const oldInvite = group.invite_code;
+  ok(regenerateInviteCode(admin.id, group.id) !== oldInvite, 'admins can rotate invite codes');
 
   // ── membership and permissions ─────────────────────────────────────────────
   const outsider = createUser('nope', 'Outsider', 'password');
@@ -161,7 +182,12 @@ try {
   const aBefore = balance(a.id, group.id);
   const adminBefore = balance(admin.id, group.id);
 
-  resolveMarket(admin.id, market.id, 'YES');
+  proposeResolution(admin.id, market.id, 'YES', 'The test suite reached the resolution section.');
+  ok(marketById(market.id)!.status === 'resolving', 'an admin proposal starts resolution review');
+  throws(() => finalizeResolution(admin.id, market.id), 'an undisputed result cannot skip the review window');
+  disputeResolution(b.id, market.id, 'The suite has not finished all assertions yet.');
+  ok(get<{ n: number }>('SELECT COUNT(*) AS n FROM market_disputes WHERE market_id = ?', market.id)!.n === 1, 'members can dispute a proposed result');
+  finalizeResolution(admin.id, market.id);
 
   close(balance(a.id, group.id), aBefore + winner, 'every winning share pays exactly 1.00');
   ok(balance(admin.id, group.id) > adminBefore, 'the leftover pool returns to the seeder');
@@ -175,14 +201,27 @@ try {
   ok(realizedLoss < 0, 'the losing side books a loss');
 
   throws(() => buy(a.id, market.id, 'YES', 10), 'a resolved market stops trading');
-  throws(() => resolveMarket(admin.id, market.id, 'NO'), 'a market cannot resolve twice');
+  throws(() => finalizeResolution(admin.id, market.id), 'a market cannot resolve twice');
 
   // Total paid out never exceeded what the market banked.
   const paidOut = winner + (balance(admin.id, group.id) - adminBefore);
   ok(paidOut <= banked + 1e-6, `settlement paid ${paidOut.toFixed(2)} out of ${banked.toFixed(2)} banked`);
 
+  proposeResolution(admin.id, approved.id, 'YES', 'No objections expected for this test market.');
+  run("UPDATE markets SET dispute_ends_at = datetime('now', '-1 minute') WHERE id = ?", approved.id);
+  sweepResolutions(group.id);
+  ok(marketById(approved.id)!.status === 'resolved', 'undisputed results finalize after review');
+
+  startNextSeason(admin.id, group.id, null);
+  const freshGroup = get<{ current_season: number }>('SELECT current_season FROM groups WHERE id = ?', group.id)!;
+  ok(freshGroup.current_season === 2, 'owners can archive a completed season');
+  close(balance(a.id, group.id), 1000, 'a new season resets member balances');
+  ok(get<{ n: number }>('SELECT COUNT(*) AS n FROM season_results WHERE group_id = ?', group.id)!.n === 3, 'season standings are archived');
+  ok(get<{ n: number }>('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ?', a.id)!.n > 0, 'important community events create notifications');
+
   console.log(`✓ ${checks} assertions passed`);
 } finally {
+  db.close();
   for (const suffix of ['', '-journal', '-wal', '-shm']) {
     rmSync(process.env.DATABASE_PATH + suffix, { force: true });
   }

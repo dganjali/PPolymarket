@@ -1,5 +1,5 @@
 import { groupContext } from '@/lib/context';
-import { standings } from '@/lib/data';
+import { seasonHistory, standings } from '@/lib/data';
 import { dateLabel, money, money0, signedMoney } from '@/lib/format';
 import { Avatar } from '@/components/ui';
 
@@ -7,6 +7,7 @@ export default async function LeaderboardPage({ params }: { params: Promise<{ sl
   const { slug } = await params;
   const { user, group } = await groupContext(slug);
   const rows = standings(group.id, group.starting_balance);
+  const champions = seasonHistory(group.id).filter((row) => row.rank === 1);
 
   const daysLeft = group.season_ends
     ? Math.max(0, Math.ceil((Date.parse(group.season_ends) - Date.now()) / 86_400_000))
@@ -27,7 +28,7 @@ export default async function LeaderboardPage({ params }: { params: Promise<{ sl
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div className="eyebrow" style={{ color: 'var(--gold)' }}>
-            Season stakes
+            Season {group.current_season} stakes
           </div>
           <div className="mono" style={{ fontSize: 10, color: 'var(--ink-5)' }}>
             {daysLeft === null
@@ -46,6 +47,22 @@ export default async function LeaderboardPage({ params }: { params: Promise<{ sl
           {group.punishment || 'nothing — for now.'}
         </div>
       </section>
+
+      {champions.length > 0 && (
+        <section>
+          <h2 style={{ fontSize: 15, fontWeight: 600, margin: '0 0 10px' }}>Past champions</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {champions.map((champion) => (
+              <div key={champion.season_number} className="card" style={{ padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div className="mono" style={{ color: 'var(--gold)', fontSize: 11 }}>S{champion.season_number}</div>
+                <Avatar name={champion.name} size={28} radius={8} />
+                <div style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{champion.name}</div>
+                <div className="mono" style={{ fontSize: 12 }}>{money0(champion.final_total)}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section>
         <div

@@ -16,7 +16,7 @@ export default async function MarketsPage({
   const { cat = 'All', show = 'live' } = await searchParams;
   const { group, isAdmin, base } = await groupContext(slug);
 
-  const statuses = show === 'resolved' ? ['resolved'] : ['open', 'closed'];
+  const statuses = show === 'resolved' ? ['resolved'] : ['open', 'closed', 'resolving'];
   const all = marketsByGroup(group.id, statuses);
   const markets = cat === 'All' ? all : all.filter((m) => m.category === cat);
   const series = priceSeriesFor(markets.map((m) => m.id));
@@ -37,7 +37,7 @@ export default async function MarketsPage({
           }}
         >
           <div className="eyebrow" style={{ color: 'var(--gold)', marginBottom: 6 }}>
-            Season prize
+            Season {group.current_season} prize
           </div>
           <div style={{ fontSize: 12.5, lineHeight: 1.4, color: '#EDE8DE' }}>
             {group.prize || 'The admin has not put anything up yet.'}

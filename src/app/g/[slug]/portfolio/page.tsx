@@ -21,10 +21,11 @@ export default async function PortfolioPage({ params }: { params: Promise<{ slug
   }>(
     `SELECT m.id, m.question, m.outcome, p.realized, m.resolved_at
        FROM positions p JOIN markets m ON m.id = p.market_id
-      WHERE p.user_id = ? AND m.group_id = ? AND m.status = 'resolved'
+      WHERE p.user_id = ? AND m.group_id = ? AND m.season_number = ? AND m.status = 'resolved'
       ORDER BY m.resolved_at DESC LIMIT 25`,
     user.id,
     group.id,
+    group.current_season,
   );
 
   return (

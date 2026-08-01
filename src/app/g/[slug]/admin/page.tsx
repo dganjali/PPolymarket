@@ -2,14 +2,14 @@ import { headers } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { groupContext } from '@/lib/context';
-import { marketsByGroup, standings } from '@/lib/data';
+import { marketDisputes, marketsByGroup, standings } from '@/lib/data';
 import { dateLabel, money0, relative, volLabel } from '@/lib/format';
 import { AdminMarketControls } from '@/components/AdminControls';
-import { InviteCode, MemberList, SettingsForm, StakesEditor } from '@/components/AdminPanels';
+import { InviteCode, MemberList, SeasonControls, SettingsForm, StakesEditor } from '@/components/AdminPanels';
 
 export default async function AdminPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const { group, isAdmin, base } = await groupContext(slug);
+  const { user, group, isAdmin, base } = await groupContext(slug);
   if (!isAdmin) redirect(base);
 
   const h = await headers();
@@ -18,7 +18,14 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
   const origin = host ? `${proto}://${host}` : undefined;
 
   const pending = marketsByGroup(group.id, ['pending']);
-  const resolvable = marketsByGroup(group.id, ['closed', 'open']);
+  const resolvable = marketsByGroup(group.id, ['resolving', 'closed', 'open']);
+  const resolvableRows = resolvable.map((market) => {
+    const disputes = market.status === 'resolving' ? marketDisputes(market.id).length : 0;
+    const reviewOpen =
+      !!market.dispute_ends_at &&
+      new Date(`${market.dispute_ends_at.replace(' ', 'T')}Z`).getTime() > Date.now();
+    return { market, disputes, canFinalize: disputes > 0 || !reviewOpen };
+  });
   const members = standings(group.id, group.starting_balance);
 
   return (
@@ -76,7 +83,7 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
 
       <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div className="eyebrow">Resolve markets</div>
-        {resolvable.map((m) => (
+        {resolvableRows.map(({ market: m, disputes, canFinalize }) => (
           <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
             <Link href={`${base}/m/${m.id}`} style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>
               {m.question}
@@ -85,7 +92,15 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
               {volLabel(m.volume)} · {money0(m.collateral)} at stake ·{' '}
               {m.status === 'closed' ? 'closed' : `closes ${relative(m.closes_at)}`}
             </div>
-            <AdminMarketControls slug={slug} marketId={m.id} status={m.status} compact />
+            <AdminMarketControls
+              slug={slug}
+              marketId={m.id}
+              status={m.status}
+              proposedOutcome={m.proposed_outcome}
+              disputeCount={disputes}
+              canFinalize={canFinalize}
+              compact
+            />
           </div>
         ))}
         {resolvable.length === 0 && (
@@ -94,24 +109,34 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
           </div>
         )}
         <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.5 }}>
-          Resolving pays every winning share $1.00 and hands the leftover pool plus fees back to
-          whoever seeded the market. It cannot be undone.
+          Proposing a result stops trading and opens the member review window. Undisputed results
+          finalize automatically; disputed results return here for an admin decision.
         </div>
       </div>
 
-      <InviteCode code={group.invite_code} origin={origin} />
+      <InviteCode slug={slug} code={group.invite_code} origin={origin} />
 
       <SettingsForm
         slug={slug}
         seasonEnds={group.season_ends}
         marketLiquidity={group.market_liquidity}
+        disputeWindowHours={group.dispute_window_hours}
         positionsPublic={!!group.positions_public}
         requireApproval={!!group.require_approval}
       />
 
+      {user.id === group.owner_id && (
+        <SeasonControls
+          slug={slug}
+          currentSeason={group.current_season}
+          unfinishedMarkets={pending.length + resolvable.length}
+        />
+      )}
+
       <MemberList
         slug={slug}
         ownerId={group.owner_id}
+        canManageRoles={user.id === group.owner_id}
         members={members.map((m) => ({ userId: m.userId, name: m.name, handle: m.handle, role: m.role }))}
       />
     </div>

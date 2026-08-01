@@ -14,6 +14,9 @@ export interface GroupRow {
   punishment: string;
   positions_public: number;
   require_approval: number;
+  dispute_window_hours: number;
+  current_season: number;
+  season_started_at: string;
 }
 
 export interface MarketRow {
@@ -26,8 +29,14 @@ export interface MarketRow {
   category: string;
   rules: string;
   closes_at: string;
-  status: 'pending' | 'open' | 'closed' | 'resolved' | 'rejected';
+  status: 'pending' | 'open' | 'closed' | 'resolving' | 'resolved' | 'rejected';
   outcome: Side | null;
+  proposed_outcome: Side | null;
+  resolution_evidence: string;
+  resolution_proposed_by: number | null;
+  resolution_proposed_at: string | null;
+  dispute_ends_at: string | null;
+  season_number: number;
   yes_reserve: number;
   no_reserve: number;
   collateral: number;
@@ -91,7 +100,8 @@ export function marketById(id: number): MarketRow | undefined {
 export function marketsByGroup(groupId: number, statuses: string[]): MarketRow[] {
   const marks = statuses.map(() => '?').join(',');
   return all<MarketRow>(
-    `SELECT ${MARKET_COLS} WHERE m.group_id = ? AND m.status IN (${marks})
+    `SELECT ${MARKET_COLS} JOIN groups g ON g.id = m.group_id
+      WHERE m.group_id = ? AND m.season_number = g.current_season AND m.status IN (${marks})
       ORDER BY (m.status = 'open') DESC, m.volume DESC, m.id DESC`,
     groupId,
     ...statuses,
@@ -150,7 +160,9 @@ export function openLegs(userId: number, groupId: number): OpenPosition[] {
        FROM positions p
        JOIN markets m ON m.id = p.market_id
        JOIN users u ON u.id = m.creator_id
-      WHERE p.user_id = ? AND m.group_id = ? AND m.status IN ('open','closed')
+       JOIN groups g ON g.id = m.group_id
+      WHERE p.user_id = ? AND m.group_id = ? AND m.season_number = g.current_season
+        AND m.status IN ('open','closed','resolving')
         AND (p.yes_shares > 0.0001 OR p.no_shares > 0.0001)`,
     userId,
     groupId,
@@ -193,14 +205,16 @@ export function standings(groupId: number, startingBalance: number): Standing[] 
 
   const live = all<PositionRow & { yes_reserve: number; no_reserve: number }>(
     `SELECT p.*, m.yes_reserve, m.no_reserve FROM positions p JOIN markets m ON m.id = p.market_id
-      WHERE m.group_id = ? AND m.status IN ('open','closed')`,
+       JOIN groups g ON g.id = m.group_id
+      WHERE m.group_id = ? AND m.season_number = g.current_season AND m.status IN ('open','closed','resolving')`,
     groupId,
   );
 
   const tradeCounts = new Map<number, number>();
   for (const t of all<{ user_id: number; n: number }>(
     `SELECT t.user_id, COUNT(*) AS n FROM trades t JOIN markets m ON m.id = t.market_id
-      WHERE m.group_id = ? GROUP BY t.user_id`,
+       JOIN groups g ON g.id = m.group_id
+      WHERE m.group_id = ? AND m.season_number = g.current_season GROUP BY t.user_id`,
     groupId,
   )) {
     tradeCounts.set(t.user_id, t.n);
@@ -286,6 +300,35 @@ export interface CommentRow {
   handle: string;
 }
 
+export interface DisputeRow {
+  id: number;
+  market_id: number;
+  user_id: number;
+  reason: string;
+  created_at: string;
+  name: string;
+  handle: string;
+}
+
+export function marketDisputes(marketId: number): DisputeRow[] {
+  return all<DisputeRow>(
+    `SELECT d.*, u.name, u.handle FROM market_disputes d
+       JOIN users u ON u.id = d.user_id
+      WHERE d.market_id = ? ORDER BY d.id DESC`,
+    marketId,
+  );
+}
+
+export function disputeFor(userId: number, marketId: number): DisputeRow | undefined {
+  return get<DisputeRow>(
+    `SELECT d.*, u.name, u.handle FROM market_disputes d
+       JOIN users u ON u.id = d.user_id
+      WHERE d.user_id = ? AND d.market_id = ?`,
+    userId,
+    marketId,
+  );
+}
+
 export function comments(marketId: number, limit = 50): CommentRow[] {
   return all<CommentRow>(
     `SELECT c.id, c.body, c.created_at, u.name, u.handle
@@ -306,6 +349,54 @@ export function recentTrades(marketId: number, limit = 12) {
       WHERE t.market_id = ? ORDER BY t.id DESC LIMIT ?`,
     marketId,
     limit,
+  );
+}
+
+export interface NotificationRow {
+  id: number;
+  group_id: number | null;
+  market_id: number | null;
+  kind: string;
+  body: string;
+  read_at: string | null;
+  created_at: string;
+  group_slug: string | null;
+  group_name: string | null;
+}
+
+export function notifications(userId: number, limit = 60): NotificationRow[] {
+  return all<NotificationRow>(
+    `SELECT n.*, g.slug AS group_slug, g.name AS group_name
+       FROM notifications n LEFT JOIN groups g ON g.id = n.group_id
+      WHERE n.user_id = ? ORDER BY n.id DESC LIMIT ?`,
+    userId,
+    limit,
+  );
+}
+
+export function unreadNotificationCount(userId: number): number {
+  return get<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL',
+    userId,
+  )!.n;
+}
+
+export interface SeasonResultRow {
+  season_number: number;
+  rank: number;
+  final_total: number;
+  pnl: number;
+  user_id: number;
+  name: string;
+  handle: string;
+  created_at: string;
+}
+
+export function seasonHistory(groupId: number): SeasonResultRow[] {
+  return all<SeasonResultRow>(
+    `SELECT r.*, u.name, u.handle FROM season_results r JOIN users u ON u.id = r.user_id
+      WHERE r.group_id = ? ORDER BY r.season_number DESC, r.rank`,
+    groupId,
   );
 }
 

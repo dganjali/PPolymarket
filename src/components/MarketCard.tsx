@@ -32,6 +32,8 @@ export function MarketCard({
               ? `closes ${relative(market.closes_at)}`
               : market.status === 'closed'
                 ? 'awaiting resolution'
+                : market.status === 'resolving'
+                  ? `proposed ${market.proposed_outcome} · in review`
                 : market.status === 'resolved'
                   ? `resolved ${market.outcome}`
                   : market.status}
@@ -84,6 +86,8 @@ export function MarketCard({
         >
           {market.status === 'resolved'
             ? `Settled ${market.outcome} — ${market.outcome === 'YES' ? 'Yes' : 'No'} shares paid $1.00`
+            : market.status === 'resolving'
+              ? `Proposed ${market.proposed_outcome} — open for member review`
             : 'Trading closed — waiting on the admin'}
         </div>
       )}

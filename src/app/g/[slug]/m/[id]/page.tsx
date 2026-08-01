@@ -4,8 +4,10 @@ import { ladder, priceYes, type Side } from '@/lib/amm';
 import { groupContext } from '@/lib/context';
 import {
   comments,
+  disputeFor,
   holders,
   marketById,
+  marketDisputes,
   marketTraderCount,
   positionFor,
   priceSeries,
@@ -27,6 +29,7 @@ import {
 import { PriceChart } from '@/components/Chart';
 import { TradePanel } from '@/components/TradePanel';
 import { CommentBox } from '@/components/CommentBox';
+import { DisputeForm } from '@/components/DisputeForm';
 import { AdminMarketControls } from '@/components/AdminControls';
 import { Avatar } from '@/components/ui';
 
@@ -59,6 +62,9 @@ export default async function MarketPage({
   const noHolders = holders(market.id, 'NO');
   const trades = recentTrades(market.id);
   const thread = comments(market.id);
+  const disputes = market.status === 'resolving' ? marketDisputes(market.id) : [];
+  const myDispute = market.status === 'resolving' ? disputeFor(user.id, market.id) : undefined;
+  const reviewOpen = !!market.dispute_ends_at && new Date(`${market.dispute_ends_at.replace(' ', 'T')}Z`).getTime() > Date.now();
 
   return (
     <div className="wrap" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -79,6 +85,8 @@ export default async function MarketPage({
               ? `closes ${dateLabel(market.closes_at)}`
               : market.status === 'resolved'
                 ? `settled ${market.outcome}`
+                : market.status === 'resolving'
+                  ? `proposed ${market.proposed_outcome}`
                 : market.status}
           </span>
         </div>
@@ -139,6 +147,44 @@ export default async function MarketPage({
                 {market.resolved_at ? ` · ${relative(market.resolved_at)}` : ''}.
                 {pos && (pos.realized !== 0 ? ` You booked ${signedMoney(pos.realized)}.` : '')}
               </div>
+            </div>
+          )}
+
+          {market.status === 'resolving' && market.proposed_outcome && (
+            <div
+              className="panel"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                borderColor: market.proposed_outcome === 'YES' ? 'var(--yes-line)' : 'var(--no-line)',
+              }}
+            >
+              <div className="eyebrow">Proposed result · {market.proposed_outcome}</div>
+              <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
+                {market.resolution_evidence}
+              </div>
+              <div className="mono" style={{ fontSize: 10, color: 'var(--dim)' }}>
+                {reviewOpen && market.dispute_ends_at
+                  ? `Review closes ${relative(market.dispute_ends_at)}`
+                  : disputes.length
+                    ? 'Review closed · waiting for an admin decision'
+                    : 'Review complete · finalizing'}
+                {' · '}{disputes.length} dispute{disputes.length === 1 ? '' : 's'}
+              </div>
+
+              {disputes.map((d) => (
+                <div key={d.id} style={{ padding: 10, borderRadius: 9, background: 'var(--app)' }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>{d.reason}</div>
+                  <div className="mono" style={{ fontSize: 9.5, color: 'var(--dim-2)', marginTop: 5 }}>
+                    @{d.handle} · {relative(d.created_at)}
+                  </div>
+                </div>
+              ))}
+
+              {reviewOpen && !isAdmin && (
+                <DisputeForm slug={slug} marketId={market.id} existingReason={myDispute?.reason} />
+              )}
             </div>
           )}
 
@@ -257,7 +303,14 @@ export default async function MarketPage({
           </div>
 
           {isAdmin && market.status !== 'resolved' && (
-            <AdminMarketControls slug={slug} marketId={market.id} status={market.status} />
+            <AdminMarketControls
+              slug={slug}
+              marketId={market.id}
+              status={market.status}
+              proposedOutcome={market.proposed_outcome}
+              disputeCount={disputes.length}
+              canFinalize={!reviewOpen || disputes.length > 0}
+            />
           )}
 
           <CommentBox slug={slug} marketId={market.id} thread={thread} />
@@ -323,6 +376,8 @@ export default async function MarketPage({
             <div className="notice">
               {market.status === 'closed'
                 ? 'Trading is closed. The admin still has to call it.'
+                : market.status === 'resolving'
+                  ? 'Trading is closed while the group reviews the proposed result.'
                 : market.status === 'pending'
                   ? 'Waiting on admin approval before the group can trade.'
                   : 'This market is settled.'}

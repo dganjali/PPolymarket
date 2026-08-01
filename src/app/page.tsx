@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { currentUser } from '@/lib/auth';
-import { myGroups } from '@/lib/data';
+import { myGroups, unreadNotificationCount } from '@/lib/data';
 import { money0 } from '@/lib/format';
 import { Avatar } from '@/components/ui';
 import { logoutAction } from './actions';
@@ -11,6 +11,7 @@ export default async function HomePage() {
   if (!user) redirect('/login');
 
   const groups = myGroups(user.id);
+  const unread = unreadNotificationCount(user.id);
 
   return (
     <main className="auth" style={{ gap: 24, paddingTop: 56 }}>
@@ -26,11 +27,14 @@ export default async function HomePage() {
             </div>
           </div>
         </div>
-        <form action={logoutAction}>
-          <button type="submit" className="btn btn-ghost btn-sm">
-            Sign out
-          </button>
-        </form>
+        <div style={{ display: 'flex', gap: 7 }}>
+          <Link href="/notifications" className="btn btn-ghost btn-sm">
+            Alerts{unread ? ` · ${unread}` : ''}
+          </Link>
+          <form action={logoutAction}>
+            <button type="submit" className="btn btn-ghost btn-sm">Sign out</button>
+          </form>
+        </div>
       </div>
 
       <div>

@@ -7,7 +7,7 @@ import {
   settle,
   type Side,
 } from './amm';
-import { groupByCode, marketById, membership, reserves, type GroupRow, type MarketRow } from './data';
+import { groupByCode, marketById, membership, reserves, standings, type GroupRow, type MarketRow } from './data';
 import { money, shares as fmtShares, slugify } from './format';
 
 export class AppError extends Error {}
@@ -106,6 +106,7 @@ export function joinGroup(userId: number, code: string): GroupRow {
       group.starting_balance,
     );
     logEvent(group.id, null, userId, 'join', 'joined the group');
+    notifyAdmins(group.id, userId, null, 'member', 'A new member joined your community.');
   });
   return group;
 }
@@ -127,6 +128,18 @@ export function removeMember(userId: number, groupId: number, targetId: number) 
   const group = get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId);
   if (!group) fail('Group not found.');
   if (targetId === group.owner_id) fail('You cannot remove the group owner.');
+  const targetMembership = membership(targetId, groupId) ?? fail('That person is not in this group.');
+  if (targetMembership.role === 'admin' && userId !== group.owner_id) {
+    fail('Only the owner can remove another admin.');
+  }
+  const openPositions = get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM positions p JOIN markets m ON m.id = p.market_id
+      WHERE p.user_id = ? AND m.group_id = ? AND m.status IN ('open','closed','resolving')
+        AND (p.yes_shares > 0.0001 OR p.no_shares > 0.0001)`,
+    targetId,
+    groupId,
+  )!.n;
+  if (openPositions) fail('Resolve or sell this member’s open positions before removing them.');
   const target = get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId);
   tx(() => {
     run('DELETE FROM memberships WHERE user_id = ? AND group_id = ?', targetId, groupId);
@@ -140,7 +153,7 @@ export function updateGroup(
   patch: Partial<
     Pick<
       GroupRow,
-      'prize' | 'punishment' | 'season_ends' | 'positions_public' | 'require_approval' | 'market_liquidity'
+      'prize' | 'punishment' | 'season_ends' | 'positions_public' | 'require_approval' | 'market_liquidity' | 'dispute_window_hours'
     >
   >,
 ) {
@@ -190,8 +203,8 @@ export function createMarket(userId: number, group: GroupRow, input: NewMarket):
     const res = run(
       `INSERT INTO markets
          (group_id, creator_id, question, category, rules, closes_at, status,
-          yes_reserve, no_reserve, collateral, subsidy, house, open_price)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          yes_reserve, no_reserve, collateral, subsidy, house, open_price, season_number)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       group.id,
       userId,
       question,
@@ -205,6 +218,7 @@ export function createMarket(userId: number, group: GroupRow, input: NewMarket):
       stake,
       house,
       price,
+      group.current_season,
     );
     const id = Number(res.lastInsertRowid);
 
@@ -217,6 +231,10 @@ export function createMarket(userId: number, group: GroupRow, input: NewMarket):
       status === 'open' ? 'market' : 'proposal',
       status === 'open' ? `opened “${question}”` : `proposed “${question}”`,
     );
+    if (status === 'pending') {
+      const proposer = get<{ handle: string }>('SELECT handle FROM users WHERE id = ?', userId)!;
+      notifyAdmins(group.id, userId, id, 'market', `@${proposer.handle} proposed a new market.`);
+    }
     return marketById(id)!;
   });
 }
@@ -228,6 +246,9 @@ export function approveMarket(userId: number, marketId: number) {
   tx(() => {
     run("UPDATE markets SET status = 'open' WHERE id = ?", marketId);
     logEvent(m.group_id, marketId, userId, 'market', `approved “${m.question}”`);
+    if (m.creator_id !== userId) {
+      notifyUser(m.creator_id, m.group_id, marketId, 'market', `Your market “${m.question}” was approved.`);
+    }
   });
 }
 
@@ -245,6 +266,9 @@ export function rejectMarket(userId: number, marketId: number) {
       m.group_id,
     );
     logEvent(m.group_id, marketId, userId, 'market', `rejected “${m.question}”`);
+    if (m.creator_id !== userId) {
+      notifyUser(m.creator_id, m.group_id, marketId, 'market', `Your market “${m.question}” was rejected.`);
+    }
   });
 }
 
@@ -266,14 +290,128 @@ export function sweepClosures(groupId: number) {
 export function reopenMarket(userId: number, marketId: number, closesAt: string) {
   const m = marketById(marketId) ?? fail('Market not found.');
   requireAdmin(userId, m.group_id);
-  if (m.status !== 'closed') fail('Only a closed market can reopen.');
-  run("UPDATE markets SET status = 'open', closes_at = ? WHERE id = ?", closesAt, marketId);
-  logEvent(m.group_id, marketId, userId, 'market', `reopened “${m.question}”`);
+  if (m.status !== 'closed' && m.status !== 'resolving') fail('Only a closed market can reopen.');
+  tx(() => {
+    run(
+      `UPDATE markets SET status = 'open', closes_at = ?, proposed_outcome = NULL,
+              resolution_evidence = '', resolution_proposed_by = NULL,
+              resolution_proposed_at = NULL, dispute_ends_at = NULL WHERE id = ?`,
+      closesAt,
+      marketId,
+    );
+    run('DELETE FROM market_disputes WHERE market_id = ?', marketId);
+    logEvent(m.group_id, marketId, userId, 'market', `reopened “${m.question}”`);
+  });
 }
 
-export function resolveMarket(userId: number, marketId: number, outcome: Side) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireAdmin(userId, m.group_id);
+export function setMemberRole(
+  userId: number,
+  groupId: number,
+  targetId: number,
+  role: 'admin' | 'member',
+) {
+  requireAdmin(userId, groupId);
+  const group = get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  if (group.owner_id !== userId) fail('Only the community owner can change admin roles.');
+  if (targetId === group.owner_id) fail('The owner must remain an admin.');
+  requireMember(targetId, groupId);
+  const target = get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId)!;
+  tx(() => {
+    run('UPDATE memberships SET role = ? WHERE user_id = ? AND group_id = ?', role, targetId, groupId);
+    logEvent(groupId, null, userId, 'group', `${role === 'admin' ? 'promoted' : 'returned'} ${target.name} ${role === 'admin' ? 'to admin' : 'to member'}`);
+    notifyUser(targetId, groupId, null, 'role', `You are now ${role === 'admin' ? 'an admin' : 'a member'} of ${group.name}.`);
+  });
+}
+
+export function regenerateInviteCode(userId: number, groupId: number): string {
+  requireAdmin(userId, groupId);
+  let code = randomCode();
+  while (get('SELECT id FROM groups WHERE invite_code = ?', code)) code = randomCode();
+  run('UPDATE groups SET invite_code = ? WHERE id = ?', code, groupId);
+  logEvent(groupId, null, userId, 'group', 'rotated the invite code');
+  return code;
+}
+
+export function markNotificationsRead(userId: number) {
+  run("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND read_at IS NULL", userId);
+}
+
+export function startNextSeason(userId: number, groupId: number, seasonEnds: string | null) {
+  requireAdmin(userId, groupId);
+  const group = get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  if (group.owner_id !== userId) fail('Only the community owner can start a new season.');
+  const unfinished = get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM markets
+      WHERE group_id = ? AND season_number = ? AND status NOT IN ('resolved','rejected')`,
+    groupId,
+    group.current_season,
+  )!.n;
+  if (unfinished) fail('Resolve or reject every current-season market first.');
+  const rows = standings(groupId, group.starting_balance);
+
+  tx(() => {
+    for (const [index, row] of rows.entries()) {
+      run(
+        `INSERT INTO season_results
+          (group_id, season_number, user_id, rank, final_total, pnl)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        groupId,
+        group.current_season,
+        row.userId,
+        index + 1,
+        row.total,
+        row.pnl,
+      );
+    }
+    run(
+      `UPDATE groups SET current_season = current_season + 1, season_started_at = datetime('now'),
+              season_ends = ? WHERE id = ?`,
+      seasonEnds || null,
+      groupId,
+    );
+    run('UPDATE memberships SET balance = ? WHERE group_id = ?', group.starting_balance, groupId);
+    logEvent(groupId, null, userId, 'season', `started season ${group.current_season + 1}`);
+    notifyMembers(groupId, userId, null, 'season', `${group.name} season ${group.current_season + 1} has started.`);
+  });
+}
+
+function notifyUser(
+  userId: number,
+  groupId: number | null,
+  marketId: number | null,
+  kind: string,
+  body: string,
+) {
+  run(
+    'INSERT INTO notifications (user_id, group_id, market_id, kind, body) VALUES (?, ?, ?, ?, ?)',
+    userId,
+    groupId,
+    marketId,
+    kind,
+    body,
+  );
+}
+
+function notifyAdmins(groupId: number, actorId: number, marketId: number | null, kind: string, body: string) {
+  const admins = all<{ user_id: number }>(
+    "SELECT user_id FROM memberships WHERE group_id = ? AND role = 'admin' AND user_id <> ?",
+    groupId,
+    actorId,
+  );
+  for (const admin of admins) notifyUser(admin.user_id, groupId, marketId, kind, body);
+}
+
+function notifyMembers(groupId: number, actorId: number, marketId: number | null, kind: string, body: string) {
+  const members = all<{ user_id: number }>(
+    'SELECT user_id FROM memberships WHERE group_id = ? AND user_id <> ?',
+    groupId,
+    actorId,
+  );
+  for (const member of members) notifyUser(member.user_id, groupId, marketId, kind, body);
+}
+
+function settleMarket(m: MarketRow, outcome: Side, actorId: number | null) {
+  const marketId = m.id;
   if (m.status === 'resolved') fail('That market is already resolved.');
   if (m.status === 'pending' || m.status === 'rejected') fail('That market never opened.');
 
@@ -334,8 +472,110 @@ export function resolveMarket(userId: number, marketId: number, outcome: Side) {
       marketId,
     );
     run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', marketId, outcome === 'YES' ? 1 : 0);
-    logEvent(m.group_id, marketId, userId, 'resolve', `resolved “${m.question}” → ${outcome}`);
+    logEvent(m.group_id, marketId, actorId, 'resolve', `resolved “${m.question}” → ${outcome}`);
+    const recipients = new Set(
+      all<{ user_id: number }>('SELECT user_id FROM positions WHERE market_id = ?', marketId).map((p) => p.user_id),
+    );
+    recipients.add(m.creator_id);
+    for (const recipient of recipients) {
+      if (recipient !== actorId) {
+        notifyUser(recipient, m.group_id, marketId, 'resolution', `“${m.question}” finalized ${outcome}.`);
+      }
+    }
   });
+}
+
+/** Immediate settlement retained for seeds and trusted maintenance scripts. */
+export function resolveMarket(userId: number, marketId: number, outcome: Side) {
+  const m = marketById(marketId) ?? fail('Market not found.');
+  requireAdmin(userId, m.group_id);
+  settleMarket(m, outcome, userId);
+}
+
+export function proposeResolution(userId: number, marketId: number, outcome: Side, evidence: string) {
+  const m = marketById(marketId) ?? fail('Market not found.');
+  requireAdmin(userId, m.group_id);
+  if (!['open', 'closed', 'resolving'].includes(m.status)) fail('That market cannot be resolved.');
+  const note = evidence.trim().slice(0, 1000);
+  if (note.length < 4) fail('Add a short source or explanation for the result.');
+  const group = get<GroupRow>('SELECT * FROM groups WHERE id = ?', m.group_id)!;
+  const hours = Math.max(1, Math.min(168, group.dispute_window_hours || 24));
+
+  tx(() => {
+    run('DELETE FROM market_disputes WHERE market_id = ?', marketId);
+    run(
+      `UPDATE markets SET status = 'resolving', proposed_outcome = ?, resolution_evidence = ?,
+              resolution_proposed_by = ?, resolution_proposed_at = datetime('now'),
+              dispute_ends_at = datetime('now', ?) WHERE id = ?`,
+      outcome,
+      note,
+      userId,
+      `+${hours} hours`,
+      marketId,
+    );
+    logEvent(
+      m.group_id,
+      marketId,
+      userId,
+      'resolution',
+      `proposed ${outcome} for “${m.question}” — ${hours}h review`,
+    );
+    notifyMembers(m.group_id, userId, marketId, 'resolution', `Result proposed: “${m.question}” → ${outcome}.`);
+  });
+}
+
+export function disputeResolution(userId: number, marketId: number, reason: string) {
+  const m = marketById(marketId) ?? fail('Market not found.');
+  requireMember(userId, m.group_id);
+  if (m.status !== 'resolving' || !m.proposed_outcome || !m.dispute_ends_at) {
+    fail('There is no proposed result to dispute.');
+  }
+  const review = get<{ expired: number }>(
+    "SELECT dispute_ends_at <= datetime('now') AS expired FROM markets WHERE id = ?",
+    marketId,
+  )!;
+  if (review.expired) fail('The dispute window has closed.');
+  const note = reason.trim().slice(0, 600);
+  if (note.length < 5) fail('Explain why the proposed result is wrong.');
+
+  tx(() => {
+    run(
+      `INSERT INTO market_disputes (market_id, user_id, reason) VALUES (?, ?, ?)
+       ON CONFLICT(market_id, user_id) DO UPDATE SET reason = excluded.reason, created_at = datetime('now')`,
+      marketId,
+      userId,
+      note,
+    );
+    logEvent(m.group_id, marketId, userId, 'dispute', `disputed the proposed ${m.proposed_outcome} result`);
+    notifyAdmins(m.group_id, userId, marketId, 'dispute', `A member disputed “${m.question}”.`);
+  });
+}
+
+export function finalizeResolution(userId: number, marketId: number) {
+  const m = marketById(marketId) ?? fail('Market not found.');
+  requireAdmin(userId, m.group_id);
+  if (m.status !== 'resolving' || !m.proposed_outcome) fail('There is no proposed result to finalize.');
+  const review = get<{ disputes: number; expired: number }>(
+    `SELECT (SELECT COUNT(*) FROM market_disputes WHERE market_id = m.id) AS disputes,
+            m.dispute_ends_at <= datetime('now') AS expired FROM markets m WHERE m.id = ?`,
+    marketId,
+  )!;
+  if (!review.expired && review.disputes === 0) fail('Members still have time to review this result.');
+  settleMarket(m, m.proposed_outcome, userId);
+}
+
+/** Finalize undisputed proposals after their review period. Cheap; called on group reads. */
+export function sweepResolutions(groupId: number) {
+  const due = all<MarketRow>(
+    `SELECT m.*, u.name AS creator_name, u.handle AS creator_handle
+       FROM markets m JOIN users u ON u.id = m.creator_id
+      WHERE m.group_id = ? AND m.status = 'resolving' AND m.dispute_ends_at <= datetime('now')
+        AND NOT EXISTS (SELECT 1 FROM market_disputes d WHERE d.market_id = m.id)`,
+    groupId,
+  );
+  for (const m of due) {
+    if (m.proposed_outcome) settleMarket(m, m.proposed_outcome, m.resolution_proposed_by);
+  }
 }
 
 // ─── trading ─────────────────────────────────────────────────────────────────

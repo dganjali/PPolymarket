@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { currentUser } from '@/lib/auth';
-import { groupBySlug, memberCount, membership, myGroups, standings } from '@/lib/data';
-import { sweepClosures } from '@/lib/engine';
+import { groupBySlug, memberCount, membership, myGroups, standings, unreadNotificationCount } from '@/lib/data';
+import { sweepClosures, sweepResolutions } from '@/lib/engine';
 import { money, signedMoney } from '@/lib/format';
 import { CreateFab, SidebarNav, TabBar, type NavItem } from '@/components/Nav';
 import { Avatar } from '@/components/ui';
@@ -25,6 +25,7 @@ export default async function GroupLayout({
   if (!ms) redirect('/join');
 
   sweepClosures(group.id);
+  sweepResolutions(group.id);
 
   const base = `/g/${slug}`;
   const isAdmin = ms.role === 'admin';
@@ -52,6 +53,7 @@ export default async function GroupLayout({
   const total = mine?.total ?? ms.balance;
   const pnl = total - group.starting_balance;
   const groups = myGroups(user.id);
+  const unread = unreadNotificationCount(user.id);
 
   return (
     <div className="shell">
@@ -137,6 +139,9 @@ export default async function GroupLayout({
                 {memberCount(group.id)} members
               </div>
             </div>
+          </Link>
+          <Link href="/notifications" className="btn btn-ghost btn-sm" aria-label="Notifications">
+            Alerts{unread ? ` · ${unread}` : ''}
           </Link>
           <div style={{ textAlign: 'right' }}>
             <div className="mono" style={{ fontSize: 16, fontWeight: 600 }}>

@@ -5,10 +5,15 @@ import { currentUser } from '@/lib/auth';
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{ next?: string; error?: string }>;
 }) {
   if (await currentUser()) redirect('/');
-  const { next } = await searchParams;
+  const { next, error } = await searchParams;
+  const externalError = error === 'google_failed'
+    ? 'Google sign-in could not be completed. Please try again.'
+    : error === 'google_not_configured'
+      ? 'Google sign-in has not been configured on this installation.'
+      : undefined;
 
   return (
     <main className="auth" style={{ gap: 26 }}>
@@ -21,7 +26,12 @@ export default async function LoginPage({
           </div>
         </div>
       </div>
-      <AuthForm mode="login" next={next} />
+      <AuthForm
+        mode="login"
+        next={next}
+        googleEnabled={!!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)}
+        externalError={externalError}
+      />
     </main>
   );
 }

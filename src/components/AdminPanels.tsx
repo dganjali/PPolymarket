@@ -3,6 +3,9 @@
 import { useActionState, useState } from 'react';
 import {
   kickMemberAction,
+  memberRoleAction,
+  regenerateInviteAction,
+  startNextSeasonAction,
   updateSettingsAction,
   updateStakesAction,
   type FormState,
@@ -98,12 +101,14 @@ export function SettingsForm({
   slug,
   seasonEnds,
   marketLiquidity,
+  disputeWindowHours,
   positionsPublic,
   requireApproval,
 }: {
   slug: string;
   seasonEnds: string | null;
   marketLiquidity: number;
+  disputeWindowHours: number;
   positionsPublic: boolean;
   requireApproval: boolean;
 }) {
@@ -142,6 +147,26 @@ export function SettingsForm({
         </div>
       </div>
 
+      <div className="field">
+        <label htmlFor="disputeWindowHours">Result review window</label>
+        <select
+          id="disputeWindowHours"
+          name="disputeWindowHours"
+          defaultValue={disputeWindowHours}
+          className="mono"
+        >
+          <option value={1}>1 hour</option>
+          <option value={6}>6 hours</option>
+          <option value={24}>24 hours</option>
+          <option value={48}>48 hours</option>
+          <option value={72}>3 days</option>
+          <option value={168}>7 days</option>
+        </select>
+        <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.55 }}>
+          Members can dispute an admin&rsquo;s proposed result during this window.
+        </div>
+      </div>
+
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5 }}>
         <input
           type="checkbox"
@@ -173,8 +198,9 @@ export function SettingsForm({
   );
 }
 
-export function InviteCode({ code, origin }: { code: string; origin?: string }) {
+export function InviteCode({ slug, code, origin }: { slug: string; code: string; origin?: string }) {
   const [copied, setCopied] = useState(false);
+  const [state, formAction] = useActionState(regenerateInviteAction, {} as FormState);
   const link = `${origin ?? ''}/join?code=${code}`;
 
   return (
@@ -202,6 +228,14 @@ export function InviteCode({ code, origin }: { code: string; origin?: string }) 
       >
         {copied ? 'Copied' : 'Copy invite link'}
       </button>
+      <form action={formAction}>
+        <input type="hidden" name="slug" value={slug} />
+        <SubmitButton className="btn btn-ghost btn-sm" pendingLabel="Rotating…">
+          Rotate invite code
+        </SubmitButton>
+      </form>
+      {state.error && <div className="error">{state.error}</div>}
+      <Toast message={state.ok} />
     </div>
   );
 }
@@ -210,12 +244,15 @@ export function MemberList({
   slug,
   members,
   ownerId,
+  canManageRoles,
 }: {
   slug: string;
   members: { userId: number; name: string; handle: string; role: string }[];
   ownerId: number;
+  canManageRoles: boolean;
 }) {
   const [state, formAction] = useActionState(kickMemberAction, {} as FormState);
+  const [roleState, roleAction] = useActionState(memberRoleAction, {} as FormState);
 
   return (
     <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -230,18 +267,72 @@ export function MemberList({
             </div>
           </div>
           {m.userId !== ownerId && (
-            <form action={formAction}>
-              <input type="hidden" name="slug" value={slug} />
-              <input type="hidden" name="userId" value={m.userId} />
-              <SubmitButton className="btn btn-ghost btn-sm" pendingLabel="…">
-                Remove
-              </SubmitButton>
-            </form>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {canManageRoles && (
+                <form action={roleAction}>
+                  <input type="hidden" name="slug" value={slug} />
+                  <input type="hidden" name="userId" value={m.userId} />
+                  <input type="hidden" name="role" value={m.role === 'admin' ? 'member' : 'admin'} />
+                  <SubmitButton className="btn btn-ghost btn-sm" pendingLabel="…">
+                    {m.role === 'admin' ? 'Demote' : 'Make admin'}
+                  </SubmitButton>
+                </form>
+              )}
+              <form action={formAction}>
+                <input type="hidden" name="slug" value={slug} />
+                <input type="hidden" name="userId" value={m.userId} />
+                <SubmitButton className="btn btn-ghost btn-sm" pendingLabel="…">
+                  Remove
+                </SubmitButton>
+              </form>
+            </div>
           )}
         </div>
       ))}
       {state.error && <div className="error">{state.error}</div>}
+      {roleState.error && <div className="error">{roleState.error}</div>}
       <Toast message={state.ok} />
+      <Toast message={roleState.ok} />
     </div>
+  );
+}
+
+export function SeasonControls({
+  slug,
+  currentSeason,
+  unfinishedMarkets,
+}: {
+  slug: string;
+  currentSeason: number;
+  unfinishedMarkets: number;
+}) {
+  const [state, formAction] = useActionState(startNextSeasonAction, {} as FormState);
+  return (
+    <form action={formAction} className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <input type="hidden" name="slug" value={slug} />
+      <div className="eyebrow">Season {currentSeason}</div>
+      <div style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-4)' }}>
+        Starting a new season archives the final standings and resets every member to the starting bankroll.
+      </div>
+      <div className="field">
+        <label htmlFor="nextSeasonEnds">Next season ends</label>
+        <input id="nextSeasonEnds" name="seasonEnds" type="date" className="mono" />
+      </div>
+      {unfinishedMarkets > 0 && (
+        <div className="notice">
+          {unfinishedMarkets} market{unfinishedMarkets === 1 ? '' : 's'} must be resolved or rejected first.
+        </div>
+      )}
+      {state.error && <div className="error">{state.error}</div>}
+      <SubmitButton
+        className="btn btn-ghost btn-sm"
+        style={{ alignSelf: 'flex-start' }}
+        disabled={unfinishedMarkets > 0}
+        pendingLabel="Starting…"
+      >
+        Archive season and reset
+      </SubmitButton>
+      <Toast message={state.ok} />
+    </form>
   );
 }
