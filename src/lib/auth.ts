@@ -1,0 +1,54 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { cookies } from 'next/headers';
+import { userById, type User } from './users';
+
+const COOKIE = 'mm_session';
+const MAX_AGE = 60 * 60 * 24 * 60; // 60 days
+
+export type { User };
+export { authenticate, createUser } from './users';
+
+function secret(): string {
+  const s = process.env.SESSION_SECRET;
+  if (s) return s;
+  // Dev fallback: stable across restarts so sessions survive a reload.
+  return `minimarket-dev-${process.env.DATABASE_PATH ?? 'data/minimarket.db'}`;
+}
+
+function sign(value: string): string {
+  return createHmac('sha256', secret()).update(value).digest('base64url');
+}
+
+export async function setSession(userId: number) {
+  const payload = `${userId}.${Date.now()}`;
+  const jar = await cookies();
+  jar.set(COOKIE, `${payload}.${sign(payload)}`, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: MAX_AGE,
+  });
+}
+
+export async function clearSession() {
+  (await cookies()).delete(COOKIE);
+}
+
+export async function currentUser(): Promise<User | null> {
+  const raw = (await cookies()).get(COOKIE)?.value;
+  if (!raw) return null;
+
+  const idx = raw.lastIndexOf('.');
+  if (idx < 0) return null;
+  const payload = raw.slice(0, idx);
+
+  const expected = Buffer.from(sign(payload));
+  const actual = Buffer.from(raw.slice(idx + 1));
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
+
+  const [idStr, issued] = payload.split('.');
+  if (Date.now() - Number(issued) > MAX_AGE * 1000) return null;
+
+  return userById(Number(idStr));
+}
