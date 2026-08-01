@@ -7,7 +7,7 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ next?: string; error?: string }>;
 }) {
-  if (await currentUser()) redirect('/');
+  if (await currentUser()) redirect('/groups');
   const { next, error } = await searchParams;
   const externalError = error === 'google_failed'
     ? 'Google sign-in could not be completed. Please try again.'

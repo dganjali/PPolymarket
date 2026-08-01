@@ -1,46 +1,54 @@
-/* Minimarket design tokens — lifted from the Claude Design source. */
+/* Minimarket design tokens — Polymarket's dark palette.
+   The --gold-* names are kept as aliases of the accent slot so the older
+   screens keep working; the accent itself is now Polymarket blue. */
 :root {
-  --page: #0c0b0a;
-  --app: #131211;
-  --card: #1c1b19;
-  --panel: #181716;
-  --sunken: #100f0e;
-  --chip: #232120;
-  --chip-hi: #2c2a28;
+  --page: #0a0a0a;
+  --app: #0e0e0e;
+  --card: #151515;
+  --panel: #131313;
+  --sunken: #0b0b0b;
+  --chip: #1e1e1e;
+  --chip-hi: #282828;
 
-  --line: #221f1c;
-  --line-2: #2a2825;
-  --line-3: #37342e;
-  --line-4: #242220;
+  --line: #1d1d1d;
+  --line-2: #232323;
+  --line-3: #2e2e2e;
+  --line-4: #1c1c1c;
 
-  --ink: #f4f2ed;
-  --ink-2: #c9c3b8;
-  --ink-3: #b8b2a9;
-  --ink-4: #9a958c;
-  --ink-5: #8b8781;
-  --dim: #7e7a72;
-  --dim-2: #6e6a64;
+  --ink: #ffffff;
+  --ink-2: #dcdcdc;
+  --ink-3: #c4c4c4;
+  --ink-4: #9c9c9c;
+  --ink-5: #8c8c8c;
+  --dim: #7a7a7a;
+  --dim-2: #636363;
 
-  --gold: #e3b341;
-  --gold-hi: #f0c863;
-  --gold-ink: #191713;
-  --gold-bg: #241f16;
-  --gold-line: #3b3323;
+  --accent: #2a6cf4;
+  --accent-hi: #4d87f7;
+  --accent-ink: #ffffff;
+  --accent-bg: #14264a;
+  --accent-line: #24406e;
 
-  --yes: #3fb27f;
-  --yes-hi: #5fcb96;
-  --yes-bg: #17301f;
-  --yes-bg-hi: #1d3e28;
-  --yes-line: #2c5a3d;
+  --gold: var(--accent);
+  --gold-hi: var(--accent-hi);
+  --gold-ink: var(--accent-ink);
+  --gold-bg: var(--accent-bg);
+  --gold-line: var(--accent-line);
 
-  --no: #e05c4b;
-  --no-hi: #ee7c6c;
-  --no-bg: #301a16;
-  --no-bg-hi: #3d211c;
-  --no-line: #5c302a;
+  --yes: #27ae60;
+  --yes-hi: #4ec97f;
+  --yes-bg: #14291d;
+  --yes-bg-hi: #1a3626;
+  --yes-line: #27502f;
+
+  --no: #e15241;
+  --no-hi: #f4776a;
+  --no-bg: #2c1614;
+  --no-bg-hi: #3a1d19;
+  --no-line: #5a2b24;
 
   --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --sans: 'Inter', system-ui, -apple-system, sans-serif;
 
   --nav-h: 72px;
 }
@@ -122,7 +130,7 @@ textarea { resize: vertical; line-height: 1.45; }
 .avatar {
   display: flex; align-items: center; justify-content: center;
   flex: none;
-  background: #26241f;
+  background: #232323;
   border: 1px solid var(--line-3);
   font-family: var(--mono); font-weight: 600;
   color: var(--ink-2);
@@ -152,7 +160,7 @@ textarea { resize: vertical; line-height: 1.45; }
   color: var(--ink-4); font-size: 12.5px; font-weight: 500;
   transition: all 0.12s ease;
 }
-.chip[data-on='true'] { background: #ede8de; border-color: #ede8de; color: var(--gold-ink); }
+.chip[data-on='true'] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
 .pill-yes {
   background: var(--yes-bg); border: 1px solid var(--yes-line); color: var(--yes-hi);
@@ -237,7 +245,7 @@ textarea { resize: vertical; line-height: 1.45; }
 /* ── market card ──────────────────────────────────────────────────────────── */
 
 .market-card { padding: 14px; display: flex; flex-direction: column; gap: 12px; transition: border-color 0.12s ease; }
-.market-card:hover { border-color: #3a3630; }
+.market-card:hover { border-color: #333; }
 .market-meta {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   font-family: var(--mono); font-size: 9.5px;
@@ -303,7 +311,7 @@ textarea { resize: vertical; line-height: 1.45; }
 .toast {
   /* Clears the fixed buy bar, which sits at nav-h + 10 and is ~56px tall. */
   position: fixed; left: 16px; right: 16px; bottom: calc(var(--nav-h) + 78px); z-index: 80;
-  background: #ede8de; color: var(--gold-ink);
+  background: #f2f2f2; color: #101010;
   border-radius: 12px; padding: 13px 15px;
   font-size: 13.5px; font-weight: 500;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);

@@ -1,88 +1,84 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { currentUser } from '@/lib/auth';
-import { myGroups, unreadNotificationCount } from '@/lib/data';
-import { money0 } from '@/lib/format';
-import { Avatar } from '@/components/ui';
-import { logoutAction } from './actions';
+import { CARDS, FILTERS, SLIDES, TOPICS } from '@/lib/landing';
+import { Filters } from '@/components/landing/Filters';
+import { Header } from '@/components/landing/Header';
+import { Hero } from '@/components/landing/Hero';
+import { MarketCard } from '@/components/landing/MarketCards';
+import { Rail } from '@/components/landing/Rail';
+import { Bookmark, Search, Sliders } from '@/components/landing/Icons';
+import './landing.css';
 
-export default async function HomePage() {
+export default async function LandingPage() {
   const user = await currentUser();
-  if (!user) redirect('/login');
-
-  const [groups, unread] = await Promise.all([myGroups(user.id), unreadNotificationCount(user.id)]);
 
   return (
-    <main className="auth" style={{ gap: 24, paddingTop: 56 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div className="logo" style={{ width: 34, height: 34, borderRadius: 10, fontSize: 17 }}>
-            M
-          </div>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>{user.name}</div>
-            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-5)' }}>
-              @{user.handle}
-            </div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 7 }}>
-          <Link href="/notifications" className="btn btn-ghost btn-sm">
-            Alerts{unread ? ` · ${unread}` : ''}
+    <div className="pm">
+      <Header />
+
+      <main className="pm-shell pm-main">
+        {user && (
+          <Link href="/groups" className="pm-resume">
+            Signed in as {user.name} — back to your groups →
           </Link>
-          <form action={logoutAction}>
-            <button type="submit" className="btn btn-ghost btn-sm">Sign out</button>
-          </form>
-        </div>
-      </div>
-
-      <div>
-        <div className="display" style={{ fontSize: 27 }}>
-          Your groups
-        </div>
-        <div className="lede" style={{ marginTop: 8 }}>
-          Each group has its own bankroll, its own markets, and its own stakes.
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-        {groups.map((g) => (
-          <Link
-            key={g.id}
-            href={`/g/${g.slug}`}
-            className="card"
-            style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13 }}
-          >
-            <Avatar name={g.name} size={38} radius={11} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 600 }}>{g.name}</div>
-              <div className="mono" style={{ fontSize: 10, color: 'var(--dim)', marginTop: 2 }}>
-                {g.members} member{g.members === 1 ? '' : 's'}
-                {g.role === 'admin' ? ' · admin' : ''}
-              </div>
-            </div>
-            <div className="mono" style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>
-              {money0(g.balance)}
-            </div>
-          </Link>
-        ))}
-
-        {groups.length === 0 && (
-          <div className="empty">
-            You are not in a group yet. Join one with an invite code, or start your own and send the
-            code around.
-          </div>
         )}
-      </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 'auto' }}>
-        <Link href="/join" className="btn btn-primary">
-          Join with an invite code
-        </Link>
-        <Link href="/new-group" className="btn btn-ghost">
-          Start a new group
-        </Link>
-      </div>
-    </main>
+        <section className="pm-hero">
+          <Hero slides={SLIDES} />
+          <Rail topics={TOPICS} />
+        </section>
+
+        <section className="pm-markets" id="markets">
+          <div className="pm-markets-head">
+            <h2>All markets</h2>
+            <div className="pm-markets-tools">
+              <button aria-label="Search markets">
+                <Search size={17} />
+              </button>
+              <button aria-label="Filters">
+                <Sliders size={17} />
+              </button>
+              <button aria-label="Watchlist">
+                <Bookmark size={17} />
+              </button>
+            </div>
+          </div>
+
+          <Filters items={FILTERS} />
+
+          <div className="pm-grid">
+            {CARDS.map((card) => (
+              <MarketCard key={card.id} card={card} />
+            ))}
+          </div>
+        </section>
+
+        <section className="pm-cta" id="how">
+          <h2>Run the same thing with your friends.</h2>
+          <p>
+            Minimarket gives a group its own bankroll, its own markets and its own bragging rights.
+            Play money, real prices — an automated market maker sets the odds off what people
+            actually buy.
+          </p>
+          <div className="pm-cta-btns">
+            <Link href="/signup" className="pm-btn pm-btn-blue pm-btn-lg">
+              Create an account
+            </Link>
+            <Link href="/join" className="pm-btn pm-btn-ghost pm-btn-lg">
+              Join with an invite code
+            </Link>
+          </div>
+        </section>
+
+        <footer className="pm-foot">
+          <span>Minimarket — play-money prediction markets for invite-only groups.</span>
+          <span className="pm-foot-links">
+            <Link href="/login">Log in</Link>
+            <Link href="/signup">Sign up</Link>
+            <Link href="/join">Join a group</Link>
+          </span>
+        </footer>
+      </main>
+    </div>
   );
 }

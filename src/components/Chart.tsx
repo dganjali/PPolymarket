@@ -55,18 +55,18 @@ export function PriceChart({
       >
         <defs>
           <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#3FB27F" stopOpacity="0.28" />
-            <stop offset="1" stopColor="#3FB27F" stopOpacity="0" />
+            <stop offset="0" stopColor="#27AE60" stopOpacity="0.28" />
+            <stop offset="1" stopColor="#27AE60" stopOpacity="0" />
           </linearGradient>
         </defs>
         {gridlines.map((g) => (
-          <line key={g} x1={0} x2={w} y1={y(g)} y2={y(g)} stroke="#242220" strokeWidth={1} />
+          <line key={g} x1={0} x2={w} y1={y(g)} y2={y(g)} stroke="#222222" strokeWidth={1} />
         ))}
         <polygon points={areaPoints(data, w, height, pad)} fill={`url(#${id})`} />
         <polyline
           points={sparkPoints(data, w, height, pad)}
           fill="none"
-          stroke="#3FB27F"
+          stroke="#27AE60"
           strokeWidth={2.2}
           strokeLinejoin="round"
         />

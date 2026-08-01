@@ -7,7 +7,7 @@ export default async function SignupPage({
 }: {
   searchParams: Promise<{ next?: string; error?: string }>;
 }) {
-  if (await currentUser()) redirect('/');
+  if (await currentUser()) redirect('/groups');
   const { next, error } = await searchParams;
 
   return (

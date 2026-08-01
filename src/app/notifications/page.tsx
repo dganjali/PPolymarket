@@ -13,7 +13,7 @@ export default async function NotificationsPage() {
   return (
     <main className="auth" style={{ gap: 20, paddingTop: 40 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Link href="/" className="btn btn-ghost btn-sm">←</Link>
+        <Link href="/groups" className="btn btn-ghost btn-sm">←</Link>
         <div style={{ flex: 1 }}>
           <div className="display" style={{ fontSize: 25 }}>Notifications</div>
           <div className="mono" style={{ fontSize: 10, color: 'var(--dim)', marginTop: 3 }}>

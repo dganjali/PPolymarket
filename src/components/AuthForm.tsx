@@ -23,7 +23,7 @@ export function AuthForm({
 
   return (
     <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <input type="hidden" name="next" value={next ?? '/'} />
+      <input type="hidden" name="next" value={next ?? '/groups'} />
 
       {mode === 'signup' && (
         <>
@@ -89,7 +89,7 @@ export function AuthForm({
           </div>
           <a
             className="btn btn-ghost"
-            href={`/api/auth/google?next=${encodeURIComponent(next ?? '/')}`}
+            href={`/api/auth/google?next=${encodeURIComponent(next ?? '/groups')}`}
             style={{ textAlign: 'center' }}
           >
             Continue with Google

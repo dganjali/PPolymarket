@@ -20,7 +20,7 @@ export default async function NewGroupPage() {
       <NewGroupForm />
 
       <Link
-        href="/"
+        href="/groups"
         style={{ textAlign: 'center', fontSize: 13.5, color: 'var(--ink-5)', padding: '10px 0' }}
       >
         Back to your groups

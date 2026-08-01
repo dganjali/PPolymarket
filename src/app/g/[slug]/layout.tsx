@@ -45,7 +45,7 @@ export default async function GroupLayout({
     ...(isAdmin
       ? [{ href: `${base}/admin`, label: 'Admin' }]
       : [{ href: `${base}/activity`, label: 'Activity' }]),
-    { href: '/', label: 'You' },
+    { href: '/groups', label: 'You' },
   ];
 
   const rows = await standings(group.id, group.starting_balance);
@@ -61,7 +61,7 @@ export default async function GroupLayout({
   return (
     <div className="shell">
       <aside className="sidebar">
-        <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 4px' }}>
+        <Link href="/groups" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 4px' }}>
           <div
             className="logo"
             style={{ width: 24, height: 24, borderRadius: 7, fontSize: 12 }}
@@ -132,7 +132,7 @@ export default async function GroupLayout({
 
       <div className="main">
         <header className="topbar">
-          <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Link href="/groups" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Avatar name={group.name} size={34} radius={10} />
             <div>
               <div style={{ fontSize: 14.5, fontWeight: 600, letterSpacing: '-0.01em' }}>

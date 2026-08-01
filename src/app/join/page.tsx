@@ -67,7 +67,7 @@ export default async function JoinPage({
           Start a new group instead
         </Link>
         <Link
-          href="/"
+          href="/groups"
           style={{ textAlign: 'center', fontSize: 13.5, color: 'var(--ink-5)', padding: '4px 0' }}
         >
           Back to your groups
