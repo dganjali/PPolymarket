@@ -53,5 +53,5 @@ export async function currentUser(): Promise<User | null> {
   const [idStr, issued] = payload.split('.');
   if (Date.now() - Number(issued) > MAX_AGE * 1000) return null;
 
-  return userById(Number(idStr));
+  return await userById(Number(idStr));
 }

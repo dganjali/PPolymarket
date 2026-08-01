@@ -3,6 +3,7 @@
 import { useActionState, useState } from 'react';
 import {
   kickMemberAction,
+  membershipRequestAction,
   memberRoleAction,
   regenerateInviteAction,
   startNextSeasonAction,
@@ -104,6 +105,7 @@ export function SettingsForm({
   disputeWindowHours,
   positionsPublic,
   requireApproval,
+  requireMemberApproval,
 }: {
   slug: string;
   seasonEnds: string | null;
@@ -111,6 +113,7 @@ export function SettingsForm({
   disputeWindowHours: number;
   positionsPublic: boolean;
   requireApproval: boolean;
+  requireMemberApproval: boolean;
 }) {
   const [state, formAction] = useActionState(updateSettingsAction, {} as FormState);
 
@@ -185,6 +188,16 @@ export function SettingsForm({
           style={{ width: 18, height: 18, accentColor: 'var(--gold)', flex: 'none' }}
         />
         Member markets need your approval
+      </label>
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5 }}>
+        <input
+          type="checkbox"
+          name="requireMemberApproval"
+          defaultChecked={requireMemberApproval}
+          style={{ width: 18, height: 18, accentColor: 'var(--gold)', flex: 'none' }}
+        />
+        Approve new members before issuing a bankroll
       </label>
 
       {state.error && <div className="error">{state.error}</div>}
@@ -293,6 +306,45 @@ export function MemberList({
       {roleState.error && <div className="error">{roleState.error}</div>}
       <Toast message={state.ok} />
       <Toast message={roleState.ok} />
+    </div>
+  );
+}
+
+export function MembershipRequests({
+  slug,
+  requests,
+}: {
+  slug: string;
+  requests: { user_id: number; name: string; handle: string; email: string | null }[];
+}) {
+  const [state, formAction] = useActionState(membershipRequestAction, {} as FormState);
+  if (!requests.length) return null;
+
+  return (
+    <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="eyebrow">Join requests · {requests.length}</div>
+      {requests.map((request) => (
+        <div key={request.user_id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{request.name}</div>
+            <div className="mono" style={{ fontSize: 10, color: 'var(--dim)' }}>
+              @{request.handle}{request.email ? ` · ${request.email}` : ''}
+            </div>
+          </div>
+          <form action={formAction} style={{ display: 'flex', gap: 6 }}>
+            <input type="hidden" name="slug" value={slug} />
+            <input type="hidden" name="userId" value={request.user_id} />
+            <SubmitButton name="decision" value="approve" className="btn btn-sm btn-primary" pendingLabel="…">
+              Approve
+            </SubmitButton>
+            <SubmitButton name="decision" value="reject" className="btn btn-sm btn-ghost" pendingLabel="…">
+              Decline
+            </SubmitButton>
+          </form>
+        </div>
+      ))}
+      {state.error && <div className="error">{state.error}</div>}
+      <Toast message={state.ok} />
     </div>
   );
 }

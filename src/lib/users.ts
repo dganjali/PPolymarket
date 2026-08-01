@@ -33,30 +33,30 @@ function validEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function availableHandle(preferred: string): string {
+async function availableHandle(preferred: string): Promise<string> {
   const base = normaliseHandle(preferred).slice(0, 24) || 'member';
   let handle = base;
   let suffix = 2;
-  while (get('SELECT id FROM users WHERE handle = ?', handle)) {
+  while (await get('SELECT id FROM users WHERE handle = ?', handle)) {
     handle = `${base.slice(0, 20)}_${suffix++}`;
   }
   return handle;
 }
 
-export function createUser(handle: string, name: string, password: string, email?: string): User {
+export async function createUser(handle: string, name: string, password: string, email?: string): Promise<User> {
   const clean = normaliseHandle(handle);
   const cleanEmail = email ? normaliseEmail(email) : null;
   if (clean.length < 2) throw new Error('Pick a handle with at least 2 letters or numbers.');
   if (password.length < 8) throw new Error('Password needs at least 8 characters.');
   if (password.length > 256) throw new Error('Password is too long.');
   if (cleanEmail && !validEmail(cleanEmail)) throw new Error('Enter a valid email address.');
-  if (get('SELECT id FROM users WHERE handle = ?', clean)) throw new Error('That handle is taken.');
-  if (cleanEmail && get('SELECT id FROM users WHERE email = ?', cleanEmail)) {
+  if (await get('SELECT id FROM users WHERE handle = ?', clean)) throw new Error('That handle is taken.');
+  if (cleanEmail && await get('SELECT id FROM users WHERE email = ?', cleanEmail)) {
     throw new Error('An account already uses that email.');
   }
 
   const display = name.trim() || clean;
-  const res = run(
+  const res = await run(
     'INSERT INTO users (handle, name, pass_hash, email) VALUES (?, ?, ?, ?)',
     clean,
     display,
@@ -66,9 +66,9 @@ export function createUser(handle: string, name: string, password: string, email
   return { id: Number(res.lastInsertRowid), handle: clean, name: display, email: cleanEmail };
 }
 
-export function authenticate(identifier: string, password: string): User | null {
+export async function authenticate(identifier: string, password: string): Promise<User | null> {
   const clean = identifier.trim().toLowerCase();
-  const row = get<User & { pass_hash: string }>(
+  const row = await get<User & { pass_hash: string }>(
     `SELECT id, handle, name, email, pass_hash FROM users
       WHERE ${clean.includes('@') ? 'email' : 'handle'} = ?`,
     clean.includes('@') ? normaliseEmail(clean) : normaliseHandle(clean),
@@ -77,32 +77,32 @@ export function authenticate(identifier: string, password: string): User | null 
   return { id: row.id, handle: row.handle, name: row.name, email: row.email };
 }
 
-export function upsertGoogleUser(input: {
+export async function upsertGoogleUser(input: {
   sub: string;
   email: string;
   emailVerified: boolean;
   name: string;
-}): User {
+}): Promise<User> {
   const email = normaliseEmail(input.email);
   if (!input.sub || !input.emailVerified || !validEmail(email)) {
     throw new Error('Google did not return a verified email address.');
   }
 
-  const byGoogle = get<User>(
+  const byGoogle = await get<User>(
     'SELECT id, handle, name, email FROM users WHERE google_sub = ?',
     input.sub,
   );
   if (byGoogle) return byGoogle;
 
-  const byEmail = get<User>('SELECT id, handle, name, email FROM users WHERE email = ?', email);
+  const byEmail = await get<User>('SELECT id, handle, name, email FROM users WHERE email = ?', email);
   if (byEmail) {
-    run('UPDATE users SET google_sub = ? WHERE id = ?', input.sub, byEmail.id);
+    await run('UPDATE users SET google_sub = ? WHERE id = ?', input.sub, byEmail.id);
     return byEmail;
   }
 
-  const handle = availableHandle(email.split('@')[0]);
+  const handle = await availableHandle(email.split('@')[0]);
   const name = input.name.trim() || handle;
-  const res = run(
+  const res = await run(
     `INSERT INTO users (handle, name, pass_hash, email, google_sub)
      VALUES (?, ?, '!google-only', ?, ?)`,
     handle,
@@ -113,6 +113,6 @@ export function upsertGoogleUser(input: {
   return { id: Number(res.lastInsertRowid), handle, name, email };
 }
 
-export function userById(id: number): User | null {
-  return get<User>('SELECT id, handle, name, email FROM users WHERE id = ?', id) ?? null;
+export async function userById(id: number): Promise<User | null> {
+  return await get<User>('SELECT id, handle, name, email FROM users WHERE id = ?', id) ?? null;
 }

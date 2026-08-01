@@ -19,10 +19,10 @@ export async function groupContext(slug: string): Promise<GroupContext> {
   const user = await currentUser();
   if (!user) redirect(`/login?next=${encodeURIComponent(`/g/${slug}`)}`);
 
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) notFound();
 
-  const ms = membership(user.id, group.id);
+  const ms = await membership(user.id, group.id);
   if (!ms) redirect('/join');
 
   return { user, group, ms, isAdmin: ms.role === 'admin', base: `/g/${slug}` };

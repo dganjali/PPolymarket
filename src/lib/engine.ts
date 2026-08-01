@@ -7,7 +7,24 @@ import {
   settle,
   type Side,
 } from './amm';
-import { groupByCode, marketById, membership, reserves, standings, type GroupRow, type MarketRow } from './data';
+import {
+  categoricalLiquidity,
+  categoricalPrices,
+  quoteCategoricalBuy,
+  quoteCategoricalSell,
+} from './categorical';
+import {
+  categoricalState,
+  groupByCode,
+  marketById,
+  marketOptions,
+  marketRestrictionFor,
+  membership,
+  reserves,
+  standings,
+  type GroupRow,
+  type MarketRow,
+} from './data';
 import { money, shares as fmtShares, slugify } from './format';
 
 export class AppError extends Error {}
@@ -16,8 +33,8 @@ function fail(msg: string): never {
   throw new AppError(msg);
 }
 
-function logEvent(groupId: number, marketId: number | null, userId: number | null, kind: string, body: string) {
-  run(
+async function logEvent(groupId: number, marketId: number | null, userId: number | null, kind: string, body: string) {
+  await run(
     'INSERT INTO events (group_id, market_id, user_id, kind, body) VALUES (?, ?, ?, ?, ?)',
     groupId,
     marketId,
@@ -39,7 +56,7 @@ function randomCode(): string {
 
 // ─── groups ──────────────────────────────────────────────────────────────────
 
-export function createGroup(
+export async function createGroup(
   userId: number,
   input: {
     name: string;
@@ -48,26 +65,27 @@ export function createGroup(
     seasonEnds: string | null;
     prize: string;
     punishment: string;
+    requireMemberApproval?: boolean;
   },
-): GroupRow {
+): Promise<GroupRow> {
   const name = input.name.trim();
   if (name.length < 2) fail('Give the group a name.');
   const starting = Math.max(100, Math.min(1_000_000, input.startingBalance || 2500));
   // Deep enough that one member's order doesn't swing a market end to end.
   const liquidity = Math.max(100, input.marketLiquidity || Math.round(starting * 0.2));
 
-  return tx(() => {
+  return tx(async () => {
     let slug = slugify(name);
     let n = 2;
-    while (get('SELECT id FROM groups WHERE slug = ?', slug)) slug = `${slugify(name)}-${n++}`;
+    while (await get('SELECT id FROM groups WHERE slug = ?', slug)) slug = `${slugify(name)}-${n++}`;
 
     let code = randomCode();
-    while (get('SELECT id FROM groups WHERE invite_code = ?', code)) code = randomCode();
+    while (await get('SELECT id FROM groups WHERE invite_code = ?', code)) code = randomCode();
 
-    const res = run(
+    const res = await run(
       `INSERT INTO groups (slug, name, invite_code, owner_id, starting_balance, market_liquidity,
-                           season_ends, prize, punishment)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                           season_ends, prize, punishment, require_member_approval)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       slug,
       name,
       code,
@@ -77,87 +95,170 @@ export function createGroup(
       input.seasonEnds || null,
       input.prize.trim(),
       input.punishment.trim(),
+      input.requireMemberApproval === false ? 0 : 1,
     );
     const groupId = Number(res.lastInsertRowid);
 
-    run(
+    await run(
       'INSERT INTO memberships (user_id, group_id, role, balance) VALUES (?, ?, ?, ?)',
       userId,
       groupId,
       'admin',
       starting,
     );
-    logEvent(groupId, null, userId, 'group', 'opened the group');
-    return get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId)!;
+    await run(
+      'INSERT INTO membership_grants (user_id, group_id, season_number) VALUES (?, ?, 1)',
+      userId,
+      groupId,
+    );
+    await logEvent(groupId, null, userId, 'group', 'opened the group');
+    return (await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId))!;
   });
 }
 
-export function joinGroup(userId: number, code: string): GroupRow {
-  const group = groupByCode(code);
+export async function joinGroup(userId: number, code: string): Promise<GroupRow & { join_status: 'joined' | 'pending' }> {
+  const group = await groupByCode(code);
   if (!group) fail('No group with that invite code.');
-  if (membership(userId, group.id)) return group;
+  if (await membership(userId, group.id)) return { ...group, join_status: 'joined' };
 
-  tx(() => {
-    run(
+  if (group.require_member_approval) {
+    if (await get('SELECT id FROM membership_requests WHERE user_id = ? AND group_id = ?', userId, group.id)) {
+      return { ...group, join_status: 'pending' };
+    }
+    await tx(async () => {
+      await run(
+        'INSERT INTO membership_requests (user_id, group_id) VALUES (?, ?)',
+        userId,
+        group.id,
+      );
+      await notifyAdmins(group.id, userId, null, 'member', 'A person requested to join your community.');
+    });
+    return { ...group, join_status: 'pending' };
+  }
+
+  await tx(async () => {
+    const alreadyGranted = !!(await get(
+      'SELECT id FROM membership_grants WHERE user_id = ? AND group_id = ? AND season_number = ?',
+      userId,
+      group.id,
+      group.current_season,
+    ));
+    await run(
       'INSERT INTO memberships (user_id, group_id, role, balance) VALUES (?, ?, ?, ?)',
       userId,
       group.id,
       'member',
-      group.starting_balance,
+      alreadyGranted ? 0 : group.starting_balance,
     );
-    logEvent(group.id, null, userId, 'join', 'joined the group');
-    notifyAdmins(group.id, userId, null, 'member', 'A new member joined your community.');
+    await run(
+      'INSERT OR IGNORE INTO membership_grants (user_id, group_id, season_number) VALUES (?, ?, ?)',
+      userId,
+      group.id,
+      group.current_season,
+    );
+    await logEvent(group.id, null, userId, 'join', 'joined the group');
+    await notifyAdmins(group.id, userId, null, 'member', 'A new member joined your community.');
   });
-  return group;
+  return { ...group, join_status: 'joined' };
 }
 
-export function requireMember(userId: number, groupId: number) {
-  const ms = membership(userId, groupId);
+export async function reviewMembershipRequest(
+  userId: number,
+  groupId: number,
+  targetId: number,
+  decision: 'approve' | 'reject',
+) {
+  await requireAdmin(userId, groupId);
+  const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  if (!await get('SELECT id FROM membership_requests WHERE user_id = ? AND group_id = ?', targetId, groupId)) {
+    fail('That join request is no longer pending.');
+  }
+
+  await tx(async () => {
+    if (decision === 'approve') {
+      const alreadyGranted = !!(await get(
+        'SELECT id FROM membership_grants WHERE user_id = ? AND group_id = ? AND season_number = ?',
+        targetId,
+        groupId,
+        group.current_season,
+      ));
+      await run(
+        'INSERT INTO memberships (user_id, group_id, role, balance) VALUES (?, ?, ?, ?)',
+        targetId,
+        groupId,
+        'member',
+        alreadyGranted ? 0 : group.starting_balance,
+      );
+      await run(
+        'INSERT OR IGNORE INTO membership_grants (user_id, group_id, season_number) VALUES (?, ?, ?)',
+        targetId,
+        groupId,
+        group.current_season,
+      );
+      const target = await get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId);
+      await logEvent(groupId, null, userId, 'join', `approved ${target?.name ?? 'a new member'}`);
+      await notifyUser(targetId, groupId, null, 'member', `You were approved to join ${group.name}.`);
+    } else {
+      await notifyUser(targetId, groupId, null, 'member', `Your request to join ${group.name} was declined.`);
+    }
+    await run('DELETE FROM membership_requests WHERE user_id = ? AND group_id = ?', targetId, groupId);
+  });
+}
+
+export async function requireMember(userId: number, groupId: number) {
+  const ms = await membership(userId, groupId);
   if (!ms) fail('You are not in this group.');
   return ms;
 }
 
-export function requireAdmin(userId: number, groupId: number) {
-  const ms = requireMember(userId, groupId);
+export async function requireAdmin(userId: number, groupId: number) {
+  const ms = await requireMember(userId, groupId);
   if (ms.role !== 'admin') fail('Only the group admin can do that.');
   return ms;
 }
 
-export function removeMember(userId: number, groupId: number, targetId: number) {
-  requireAdmin(userId, groupId);
-  const group = get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId);
+export async function removeMember(userId: number, groupId: number, targetId: number) {
+  await requireAdmin(userId, groupId);
+  const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId);
   if (!group) fail('Group not found.');
   if (targetId === group.owner_id) fail('You cannot remove the group owner.');
-  const targetMembership = membership(targetId, groupId) ?? fail('That person is not in this group.');
+  const targetMembership = await membership(targetId, groupId) ?? fail('That person is not in this group.');
   if (targetMembership.role === 'admin' && userId !== group.owner_id) {
     fail('Only the owner can remove another admin.');
   }
-  const openPositions = get<{ n: number }>(
+  const openPositions = (await get<{ n: number }>(
     `SELECT COUNT(*) AS n FROM positions p JOIN markets m ON m.id = p.market_id
       WHERE p.user_id = ? AND m.group_id = ? AND m.status IN ('open','closed','resolving')
         AND (p.yes_shares > 0.0001 OR p.no_shares > 0.0001)`,
     targetId,
     groupId,
-  )!.n;
-  if (openPositions) fail('Resolve or sell this member’s open positions before removing them.');
-  const target = get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId);
-  tx(() => {
-    run('DELETE FROM memberships WHERE user_id = ? AND group_id = ?', targetId, groupId);
-    logEvent(groupId, null, userId, 'group', `removed ${target?.name ?? 'a member'} from the group`);
+  ))!.n;
+  const openOptionPositions = (await get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM option_positions p JOIN markets m ON m.id = p.market_id
+      WHERE p.user_id = ? AND m.group_id = ? AND m.status IN ('open','closed','resolving')
+        AND p.shares > 0.0001`,
+    targetId,
+    groupId,
+  ))!.n;
+  if (openPositions || openOptionPositions) fail('Resolve or sell this member’s open positions before removing them.');
+  const target = await get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId);
+  await tx(async () => {
+    await run('DELETE FROM memberships WHERE user_id = ? AND group_id = ?', targetId, groupId);
+    await logEvent(groupId, null, userId, 'group', `removed ${target?.name ?? 'a member'} from the group`);
   });
 }
 
-export function updateGroup(
+export async function updateGroup(
   userId: number,
   groupId: number,
   patch: Partial<
     Pick<
       GroupRow,
-      'prize' | 'punishment' | 'season_ends' | 'positions_public' | 'require_approval' | 'market_liquidity' | 'dispute_window_hours'
+      'prize' | 'punishment' | 'season_ends' | 'positions_public' | 'require_approval' | 'require_member_approval' | 'market_liquidity' | 'dispute_window_hours'
     >
   >,
 ) {
-  requireAdmin(userId, groupId);
+  await requireAdmin(userId, groupId);
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
@@ -166,7 +267,7 @@ export function updateGroup(
     values.push(v);
   }
   if (!fields.length) return;
-  run(`UPDATE groups SET ${fields.join(', ')} WHERE id = ?`, ...values, groupId);
+  await run(`UPDATE groups SET ${fields.join(', ')} WHERE id = ?`, ...values, groupId);
 }
 
 // ─── market lifecycle ────────────────────────────────────────────────────────
@@ -178,10 +279,13 @@ export interface NewMarket {
   closesAt: string;
   openPrice: number;
   funding: number;
+  marketType?: 'binary' | 'categorical';
+  options?: string[];
+  excludedUserIds?: number[];
 }
 
-export function createMarket(userId: number, group: GroupRow, input: NewMarket): MarketRow {
-  const ms = requireMember(userId, group.id);
+export async function createMarket(userId: number, group: GroupRow, input: NewMarket): Promise<MarketRow> {
+  const ms = await requireMember(userId, group.id);
   const question = input.question.trim();
   if (question.length < 8) fail('Write a question the group can actually settle.');
 
@@ -194,17 +298,41 @@ export function createMarket(userId: number, group: GroupRow, input: NewMarket):
   const house = Math.max(100, group.market_liquidity || 500);
   const funding = house + stake;
 
-  const price = Math.max(0.03, Math.min(0.97, input.openPrice));
-  const r = seedReserves(price, funding);
+  const marketType = input.marketType === 'categorical' ? 'categorical' : 'binary';
+  const labels = (input.options ?? [])
+    .map((label) => label.trim().slice(0, 80))
+    .filter((label, index, rows) => label.length >= 1 && rows.findIndex((candidate) => candidate.toLowerCase() === label.toLowerCase()) === index)
+    .slice(0, 8);
+  if (marketType === 'categorical' && labels.length < 2) fail('Add at least two distinct outcomes.');
+  const price = marketType === 'binary' ? Math.max(0.03, Math.min(0.97, input.openPrice)) : 1 / labels.length;
+  const r = marketType === 'binary' ? seedReserves(price, funding) : { yes: 0, no: 0 };
+  const lmsrB = marketType === 'categorical' ? categoricalLiquidity(funding, labels.length) : 0;
   // The admin's own markets skip the queue; members' obey the group setting.
   const status = ms.role === 'admin' || !group.require_approval ? 'open' : 'pending';
+  const excludedUserIds = [...new Set(input.excludedUserIds ?? [])].filter(
+    (id) => Number.isInteger(id) && id > 0,
+  );
+  if (excludedUserIds.length > 0 && ms.role !== 'admin') {
+    fail('Only an admin can add conflict restrictions.');
+  }
+  if (excludedUserIds.length > 0) {
+    const marks = excludedUserIds.map(() => '?').join(',');
+    const validMembers = await all<{ user_id: number }>(
+      `SELECT user_id FROM memberships WHERE group_id = ? AND user_id IN (${marks})`,
+      group.id,
+      ...excludedUserIds,
+    );
+    if (validMembers.length !== excludedUserIds.length) {
+      fail('Every restricted participant must be a group member.');
+    }
+  }
 
-  return tx(() => {
-    const res = run(
+  return tx(async () => {
+    const res = await run(
       `INSERT INTO markets
          (group_id, creator_id, question, category, rules, closes_at, status,
-          yes_reserve, no_reserve, collateral, subsidy, house, open_price, season_number)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          market_type, yes_reserve, no_reserve, collateral, subsidy, house, open_price, lmsr_b, season_number)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       group.id,
       userId,
       question,
@@ -212,19 +340,41 @@ export function createMarket(userId: number, group: GroupRow, input: NewMarket):
       input.rules.trim(),
       input.closesAt,
       status,
+      marketType,
       r.yes,
       r.no,
       funding,
       stake,
       house,
       price,
+      lmsrB,
       group.current_season,
     );
     const id = Number(res.lastInsertRowid);
 
-    run('UPDATE memberships SET balance = balance - ? WHERE id = ?', stake, ms.id);
-    run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', id, price);
-    logEvent(
+    if (marketType === 'categorical') {
+      for (const [index, label] of labels.entries()) {
+        const option = await run(
+          'INSERT INTO market_options (market_id, label, sort_order) VALUES (?, ?, ?)',
+          id,
+          label,
+          index,
+        );
+        await run(
+          'INSERT INTO option_price_points (option_id, price) VALUES (?, ?)',
+          Number(option.lastInsertRowid),
+          price,
+        );
+      }
+    }
+
+    for (const excludedUserId of excludedUserIds) {
+      await run('INSERT INTO market_restrictions (market_id, user_id) VALUES (?, ?)', id, excludedUserId);
+    }
+
+    await run('UPDATE memberships SET balance = balance - ? WHERE id = ?', stake, ms.id);
+    if (marketType === 'binary') await run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', id, price);
+    await logEvent(
       group.id,
       id,
       userId,
@@ -232,126 +382,126 @@ export function createMarket(userId: number, group: GroupRow, input: NewMarket):
       status === 'open' ? `opened “${question}”` : `proposed “${question}”`,
     );
     if (status === 'pending') {
-      const proposer = get<{ handle: string }>('SELECT handle FROM users WHERE id = ?', userId)!;
-      notifyAdmins(group.id, userId, id, 'market', `@${proposer.handle} proposed a new market.`);
+      const proposer = (await get<{ handle: string }>('SELECT handle FROM users WHERE id = ?', userId))!;
+      await notifyAdmins(group.id, userId, id, 'market', `@${proposer.handle} proposed a new market.`);
     }
-    return marketById(id)!;
+    return (await marketById(id))!;
   });
 }
 
-export function approveMarket(userId: number, marketId: number) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireAdmin(userId, m.group_id);
+export async function approveMarket(userId: number, marketId: number) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  await requireAdmin(userId, m.group_id);
   if (m.status !== 'pending') fail('That market is not waiting for approval.');
-  tx(() => {
-    run("UPDATE markets SET status = 'open' WHERE id = ?", marketId);
-    logEvent(m.group_id, marketId, userId, 'market', `approved “${m.question}”`);
+  await tx(async () => {
+    await run("UPDATE markets SET status = 'open' WHERE id = ?", marketId);
+    await logEvent(m.group_id, marketId, userId, 'market', `approved “${m.question}”`);
     if (m.creator_id !== userId) {
-      notifyUser(m.creator_id, m.group_id, marketId, 'market', `Your market “${m.question}” was approved.`);
+      await notifyUser(m.creator_id, m.group_id, marketId, 'market', `Your market “${m.question}” was approved.`);
     }
   });
 }
 
-export function rejectMarket(userId: number, marketId: number) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireAdmin(userId, m.group_id);
+export async function rejectMarket(userId: number, marketId: number) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  await requireAdmin(userId, m.group_id);
   if (m.status !== 'pending') fail('That market is not waiting for approval.');
-  tx(() => {
-    run("UPDATE markets SET status = 'rejected' WHERE id = ?", marketId);
+  await tx(async () => {
+    await run("UPDATE markets SET status = 'rejected' WHERE id = ?", marketId);
     // The proposer gets their seed back — nobody ever traded against it.
-    run(
+    await run(
       'UPDATE memberships SET balance = balance + ? WHERE user_id = ? AND group_id = ?',
       m.subsidy,
       m.creator_id,
       m.group_id,
     );
-    logEvent(m.group_id, marketId, userId, 'market', `rejected “${m.question}”`);
+    await logEvent(m.group_id, marketId, userId, 'market', `rejected “${m.question}”`);
     if (m.creator_id !== userId) {
-      notifyUser(m.creator_id, m.group_id, marketId, 'market', `Your market “${m.question}” was rejected.`);
+      await notifyUser(m.creator_id, m.group_id, marketId, 'market', `Your market “${m.question}” was rejected.`);
     }
   });
 }
 
 /** Flip any open market whose close time has passed. Cheap; called on reads. */
-export function sweepClosures(groupId: number) {
-  const due = all<{ id: number; question: string }>(
+export async function sweepClosures(groupId: number) {
+  const due = await all<{ id: number; question: string }>(
     "SELECT id, question FROM markets WHERE group_id = ? AND status = 'open' AND closes_at <= datetime('now')",
     groupId,
   );
   if (!due.length) return;
-  tx(() => {
+  await tx(async () => {
     for (const m of due) {
-      run("UPDATE markets SET status = 'closed' WHERE id = ?", m.id);
-      logEvent(groupId, m.id, null, 'close', `“${m.question}” closed for trading`);
+      await run("UPDATE markets SET status = 'closed' WHERE id = ?", m.id);
+      await logEvent(groupId, m.id, null, 'close', `“${m.question}” closed for trading`);
     }
   });
 }
 
-export function reopenMarket(userId: number, marketId: number, closesAt: string) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireAdmin(userId, m.group_id);
+export async function reopenMarket(userId: number, marketId: number, closesAt: string) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  await requireAdmin(userId, m.group_id);
   if (m.status !== 'closed' && m.status !== 'resolving') fail('Only a closed market can reopen.');
-  tx(() => {
-    run(
+  await tx(async () => {
+    await run(
       `UPDATE markets SET status = 'open', closes_at = ?, proposed_outcome = NULL,
               resolution_evidence = '', resolution_proposed_by = NULL,
               resolution_proposed_at = NULL, dispute_ends_at = NULL WHERE id = ?`,
       closesAt,
       marketId,
     );
-    run('DELETE FROM market_disputes WHERE market_id = ?', marketId);
-    logEvent(m.group_id, marketId, userId, 'market', `reopened “${m.question}”`);
+    await run('DELETE FROM market_disputes WHERE market_id = ?', marketId);
+    await logEvent(m.group_id, marketId, userId, 'market', `reopened “${m.question}”`);
   });
 }
 
-export function setMemberRole(
+export async function setMemberRole(
   userId: number,
   groupId: number,
   targetId: number,
   role: 'admin' | 'member',
 ) {
-  requireAdmin(userId, groupId);
-  const group = get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  await requireAdmin(userId, groupId);
+  const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
   if (group.owner_id !== userId) fail('Only the community owner can change admin roles.');
   if (targetId === group.owner_id) fail('The owner must remain an admin.');
-  requireMember(targetId, groupId);
-  const target = get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId)!;
-  tx(() => {
-    run('UPDATE memberships SET role = ? WHERE user_id = ? AND group_id = ?', role, targetId, groupId);
-    logEvent(groupId, null, userId, 'group', `${role === 'admin' ? 'promoted' : 'returned'} ${target.name} ${role === 'admin' ? 'to admin' : 'to member'}`);
-    notifyUser(targetId, groupId, null, 'role', `You are now ${role === 'admin' ? 'an admin' : 'a member'} of ${group.name}.`);
+  await requireMember(targetId, groupId);
+  const target = (await get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId))!;
+  await tx(async () => {
+    await run('UPDATE memberships SET role = ? WHERE user_id = ? AND group_id = ?', role, targetId, groupId);
+    await logEvent(groupId, null, userId, 'group', `${role === 'admin' ? 'promoted' : 'returned'} ${target.name} ${role === 'admin' ? 'to admin' : 'to member'}`);
+    await notifyUser(targetId, groupId, null, 'role', `You are now ${role === 'admin' ? 'an admin' : 'a member'} of ${group.name}.`);
   });
 }
 
-export function regenerateInviteCode(userId: number, groupId: number): string {
-  requireAdmin(userId, groupId);
+export async function regenerateInviteCode(userId: number, groupId: number): Promise<string> {
+  await requireAdmin(userId, groupId);
   let code = randomCode();
-  while (get('SELECT id FROM groups WHERE invite_code = ?', code)) code = randomCode();
-  run('UPDATE groups SET invite_code = ? WHERE id = ?', code, groupId);
-  logEvent(groupId, null, userId, 'group', 'rotated the invite code');
+  while (await get('SELECT id FROM groups WHERE invite_code = ?', code)) code = randomCode();
+  await run('UPDATE groups SET invite_code = ? WHERE id = ?', code, groupId);
+  await logEvent(groupId, null, userId, 'group', 'rotated the invite code');
   return code;
 }
 
-export function markNotificationsRead(userId: number) {
-  run("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND read_at IS NULL", userId);
+export async function markNotificationsRead(userId: number) {
+  await run("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND read_at IS NULL", userId);
 }
 
-export function startNextSeason(userId: number, groupId: number, seasonEnds: string | null) {
-  requireAdmin(userId, groupId);
-  const group = get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+export async function startNextSeason(userId: number, groupId: number, seasonEnds: string | null) {
+  await requireAdmin(userId, groupId);
+  const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
   if (group.owner_id !== userId) fail('Only the community owner can start a new season.');
-  const unfinished = get<{ n: number }>(
+  const unfinished = (await get<{ n: number }>(
     `SELECT COUNT(*) AS n FROM markets
       WHERE group_id = ? AND season_number = ? AND status NOT IN ('resolved','rejected')`,
     groupId,
     group.current_season,
-  )!.n;
+  ))!.n;
   if (unfinished) fail('Resolve or reject every current-season market first.');
-  const rows = standings(groupId, group.starting_balance);
+  const rows = await standings(groupId, group.starting_balance);
 
-  tx(() => {
+  await tx(async () => {
     for (const [index, row] of rows.entries()) {
-      run(
+      await run(
         `INSERT INTO season_results
           (group_id, season_number, user_id, rank, final_total, pnl)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -363,26 +513,32 @@ export function startNextSeason(userId: number, groupId: number, seasonEnds: str
         row.pnl,
       );
     }
-    run(
+    await run(
       `UPDATE groups SET current_season = current_season + 1, season_started_at = datetime('now'),
               season_ends = ? WHERE id = ?`,
       seasonEnds || null,
       groupId,
     );
-    run('UPDATE memberships SET balance = ? WHERE group_id = ?', group.starting_balance, groupId);
-    logEvent(groupId, null, userId, 'season', `started season ${group.current_season + 1}`);
-    notifyMembers(groupId, userId, null, 'season', `${group.name} season ${group.current_season + 1} has started.`);
+    await run('UPDATE memberships SET balance = ? WHERE group_id = ?', group.starting_balance, groupId);
+    await run(
+      `INSERT OR IGNORE INTO membership_grants (user_id, group_id, season_number)
+       SELECT user_id, group_id, ? FROM memberships WHERE group_id = ?`,
+      group.current_season + 1,
+      groupId,
+    );
+    await logEvent(groupId, null, userId, 'season', `started season ${group.current_season + 1}`);
+    await notifyMembers(groupId, userId, null, 'season', `${group.name} season ${group.current_season + 1} has started.`);
   });
 }
 
-function notifyUser(
+async function notifyUser(
   userId: number,
   groupId: number | null,
   marketId: number | null,
   kind: string,
   body: string,
 ) {
-  run(
+  await run(
     'INSERT INTO notifications (user_id, group_id, market_id, kind, body) VALUES (?, ?, ?, ?, ?)',
     userId,
     groupId,
@@ -392,32 +548,112 @@ function notifyUser(
   );
 }
 
-function notifyAdmins(groupId: number, actorId: number, marketId: number | null, kind: string, body: string) {
-  const admins = all<{ user_id: number }>(
+async function notifyAdmins(groupId: number, actorId: number, marketId: number | null, kind: string, body: string) {
+  const admins = await all<{ user_id: number }>(
     "SELECT user_id FROM memberships WHERE group_id = ? AND role = 'admin' AND user_id <> ?",
     groupId,
     actorId,
   );
-  for (const admin of admins) notifyUser(admin.user_id, groupId, marketId, kind, body);
+  await Promise.all(admins.map((admin) => notifyUser(admin.user_id, groupId, marketId, kind, body)));
 }
 
-function notifyMembers(groupId: number, actorId: number, marketId: number | null, kind: string, body: string) {
-  const members = all<{ user_id: number }>(
+async function notifyMembers(groupId: number, actorId: number, marketId: number | null, kind: string, body: string) {
+  const members = await all<{ user_id: number }>(
     'SELECT user_id FROM memberships WHERE group_id = ? AND user_id <> ?',
     groupId,
     actorId,
   );
-  for (const member of members) notifyUser(member.user_id, groupId, marketId, kind, body);
+  await Promise.all(members.map((member) => notifyUser(member.user_id, groupId, marketId, kind, body)));
 }
 
-function settleMarket(m: MarketRow, outcome: Side, actorId: number | null) {
+async function settleCategoricalMarket(m: MarketRow, outcome: string, actorId: number | null) {
+  const optionId = Number(outcome);
+  const option = await get<{ id: number; label: string }>(
+    'SELECT id, label FROM market_options WHERE id = ? AND market_id = ?',
+    optionId,
+    m.id,
+  ) ?? fail('Choose a valid outcome.');
+
+  await tx(async () => {
+    const holders = await all<{ user_id: number; shares: number; cost: number }>(
+      'SELECT user_id, shares, cost FROM option_positions WHERE option_id = ? AND shares > 0.0001',
+      optionId,
+    );
+    const outstanding = holders.reduce((sum, holder) => sum + holder.shares, 0);
+    const paid = Math.min(m.collateral, outstanding);
+    const remainder = Math.max(0, m.collateral - paid);
+    const scale = outstanding > 0 ? paid / outstanding : 0;
+
+    for (const holder of holders) {
+      const payout = holder.shares * scale;
+      await run(
+        'UPDATE memberships SET balance = balance + ? WHERE user_id = ? AND group_id = ?',
+        payout,
+        holder.user_id,
+        m.group_id,
+      );
+      await run(
+        'UPDATE option_positions SET realized = realized + ? WHERE option_id = ? AND user_id = ?',
+        payout - holder.cost,
+        optionId,
+        holder.user_id,
+      );
+    }
+    await run(
+      `UPDATE option_positions SET realized = realized - cost
+        WHERE market_id = ? AND option_id <> ? AND shares > 0.0001`,
+      m.id,
+      optionId,
+    );
+
+    const lpTotal = m.subsidy + m.house;
+    const creatorCut = lpTotal > 0 ? (remainder * m.subsidy) / lpTotal : remainder;
+    if (creatorCut > 0.0001) {
+      await run(
+        'UPDATE memberships SET balance = balance + ? WHERE user_id = ? AND group_id = ?',
+        creatorCut,
+        m.creator_id,
+        m.group_id,
+      );
+    }
+
+    await run(
+      "UPDATE markets SET status = 'resolved', outcome = ?, resolved_at = datetime('now'), collateral = 0 WHERE id = ?",
+      String(optionId),
+      m.id,
+    );
+    for (const marketOption of await marketOptions(m.id)) {
+      await run(
+        'INSERT INTO option_price_points (option_id, price) VALUES (?, ?)',
+        marketOption.id,
+        marketOption.id === optionId ? 1 : 0,
+      );
+    }
+    await logEvent(m.group_id, m.id, actorId, 'resolve', `resolved “${m.question}” → ${option.label}`);
+    const recipients = new Set(
+      (await all<{ user_id: number }>('SELECT DISTINCT user_id FROM option_positions WHERE market_id = ?', m.id)).map(
+        (position) => position.user_id,
+      ),
+    );
+    recipients.add(m.creator_id);
+    for (const recipient of recipients) {
+      if (recipient !== actorId) {
+        await notifyUser(recipient, m.group_id, m.id, 'resolution', `“${m.question}” finalized ${option.label}.`);
+      }
+    }
+  });
+}
+
+async function settleMarket(m: MarketRow, outcome: string, actorId: number | null) {
   const marketId = m.id;
   if (m.status === 'resolved') fail('That market is already resolved.');
   if (m.status === 'pending' || m.status === 'rejected') fail('That market never opened.');
+  if (m.market_type === 'categorical') return await settleCategoricalMarket(m, outcome, actorId);
+  if (outcome !== 'YES' && outcome !== 'NO') fail('Choose YES or NO.');
 
-  tx(() => {
+  await tx(async () => {
     const col = outcome === 'YES' ? 'yes_shares' : 'no_shares';
-    const holders = all<{ user_id: number; shares: number; cost: number }>(
+    const holders = await all<{ user_id: number; shares: number; cost: number }>(
       `SELECT user_id, ${col} AS shares, ${outcome === 'YES' ? 'yes_cost' : 'no_cost'} AS cost
          FROM positions WHERE market_id = ? AND ${col} > 0.0001`,
       marketId,
@@ -430,13 +666,13 @@ function settleMarket(m: MarketRow, outcome: Side, actorId: number | null) {
 
     for (const h of holders) {
       const payout = h.shares * scale;
-      run(
+      await run(
         'UPDATE memberships SET balance = balance + ? WHERE user_id = ? AND group_id = ?',
         payout,
         h.user_id,
         m.group_id,
       );
-      run(
+      await run(
         'UPDATE positions SET realized = realized + ? WHERE market_id = ? AND user_id = ?',
         payout - h.cost,
         marketId,
@@ -447,7 +683,7 @@ function settleMarket(m: MarketRow, outcome: Side, actorId: number | null) {
     // Losing legs are written off against their cost basis.
     const loseCol = outcome === 'YES' ? 'no_shares' : 'yes_shares';
     const loseCost = outcome === 'YES' ? 'no_cost' : 'yes_cost';
-    run(
+    await run(
       `UPDATE positions SET realized = realized - ${loseCost} WHERE market_id = ? AND ${loseCol} > 0.0001`,
       marketId,
     );
@@ -458,7 +694,7 @@ function settleMarket(m: MarketRow, outcome: Side, actorId: number | null) {
     const lpTotal = m.subsidy + m.house;
     const creatorCut = lpTotal > 0 ? (remainder * m.subsidy) / lpTotal : remainder;
     if (creatorCut > 0.0001) {
-      run(
+      await run(
         'UPDATE memberships SET balance = balance + ? WHERE user_id = ? AND group_id = ?',
         creatorCut,
         m.creator_id,
@@ -466,107 +702,119 @@ function settleMarket(m: MarketRow, outcome: Side, actorId: number | null) {
       );
     }
 
-    run(
+    await run(
       "UPDATE markets SET status = 'resolved', outcome = ?, resolved_at = datetime('now'), collateral = 0 WHERE id = ?",
       outcome,
       marketId,
     );
-    run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', marketId, outcome === 'YES' ? 1 : 0);
-    logEvent(m.group_id, marketId, actorId, 'resolve', `resolved “${m.question}” → ${outcome}`);
+    await run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', marketId, outcome === 'YES' ? 1 : 0);
+    await logEvent(m.group_id, marketId, actorId, 'resolve', `resolved “${m.question}” → ${outcome}`);
     const recipients = new Set(
-      all<{ user_id: number }>('SELECT user_id FROM positions WHERE market_id = ?', marketId).map((p) => p.user_id),
+      (await all<{ user_id: number }>('SELECT user_id FROM positions WHERE market_id = ?', marketId)).map((p) => p.user_id),
     );
     recipients.add(m.creator_id);
     for (const recipient of recipients) {
       if (recipient !== actorId) {
-        notifyUser(recipient, m.group_id, marketId, 'resolution', `“${m.question}” finalized ${outcome}.`);
+        await notifyUser(recipient, m.group_id, marketId, 'resolution', `“${m.question}” finalized ${outcome}.`);
       }
     }
   });
 }
 
 /** Immediate settlement retained for seeds and trusted maintenance scripts. */
-export function resolveMarket(userId: number, marketId: number, outcome: Side) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireAdmin(userId, m.group_id);
-  settleMarket(m, outcome, userId);
+export async function resolveMarket(userId: number, marketId: number, outcome: string) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  await requireAdmin(userId, m.group_id);
+  await settleMarket(m, outcome, userId);
 }
 
-export function proposeResolution(userId: number, marketId: number, outcome: Side, evidence: string) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireAdmin(userId, m.group_id);
+export async function proposeResolution(userId: number, marketId: number, outcome: string, evidence: string) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  await requireAdmin(userId, m.group_id);
   if (!['open', 'closed', 'resolving'].includes(m.status)) fail('That market cannot be resolved.');
+  const outcomeLabel =
+    m.market_type === 'categorical'
+      ? (await get<{ label: string }>('SELECT label FROM market_options WHERE id = ? AND market_id = ?', Number(outcome), marketId))?.label
+      : outcome === 'YES' || outcome === 'NO'
+        ? outcome
+        : undefined;
+  if (!outcomeLabel) fail('Choose a valid outcome.');
   const note = evidence.trim().slice(0, 1000);
   if (note.length < 4) fail('Add a short source or explanation for the result.');
-  const group = get<GroupRow>('SELECT * FROM groups WHERE id = ?', m.group_id)!;
+  const group = (await get<GroupRow>('SELECT * FROM groups WHERE id = ?', m.group_id))!;
   const hours = Math.max(1, Math.min(168, group.dispute_window_hours || 24));
+  const disputeEndsAt = new Date(Date.now() + hours * 3_600_000).toISOString().slice(0, 19).replace('T', ' ');
 
-  tx(() => {
-    run('DELETE FROM market_disputes WHERE market_id = ?', marketId);
-    run(
+  await tx(async () => {
+    await run('DELETE FROM market_disputes WHERE market_id = ?', marketId);
+    await run(
       `UPDATE markets SET status = 'resolving', proposed_outcome = ?, resolution_evidence = ?,
               resolution_proposed_by = ?, resolution_proposed_at = datetime('now'),
-              dispute_ends_at = datetime('now', ?) WHERE id = ?`,
+              dispute_ends_at = ? WHERE id = ?`,
       outcome,
       note,
       userId,
-      `+${hours} hours`,
+      disputeEndsAt,
       marketId,
     );
-    logEvent(
+    await logEvent(
       m.group_id,
       marketId,
       userId,
       'resolution',
-      `proposed ${outcome} for “${m.question}” — ${hours}h review`,
+      `proposed ${outcomeLabel} for “${m.question}” — ${hours}h review`,
     );
-    notifyMembers(m.group_id, userId, marketId, 'resolution', `Result proposed: “${m.question}” → ${outcome}.`);
+    await notifyMembers(m.group_id, userId, marketId, 'resolution', `Result proposed: “${m.question}” → ${outcomeLabel}.`);
   });
 }
 
-export function disputeResolution(userId: number, marketId: number, reason: string) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireMember(userId, m.group_id);
+export async function disputeResolution(userId: number, marketId: number, reason: string) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  await requireMember(userId, m.group_id);
   if (m.status !== 'resolving' || !m.proposed_outcome || !m.dispute_ends_at) {
     fail('There is no proposed result to dispute.');
   }
-  const review = get<{ expired: number }>(
+  const review = (await get<{ expired: number }>(
     "SELECT dispute_ends_at <= datetime('now') AS expired FROM markets WHERE id = ?",
     marketId,
-  )!;
+  ))!;
   if (review.expired) fail('The dispute window has closed.');
   const note = reason.trim().slice(0, 600);
   if (note.length < 5) fail('Explain why the proposed result is wrong.');
+  const proposedLabel =
+    m.market_type === 'categorical'
+      ? (await get<{ label: string }>('SELECT label FROM market_options WHERE id = ?', Number(m.proposed_outcome)))?.label
+      : m.proposed_outcome;
 
-  tx(() => {
-    run(
+  await tx(async () => {
+    await run(
       `INSERT INTO market_disputes (market_id, user_id, reason) VALUES (?, ?, ?)
        ON CONFLICT(market_id, user_id) DO UPDATE SET reason = excluded.reason, created_at = datetime('now')`,
       marketId,
       userId,
       note,
     );
-    logEvent(m.group_id, marketId, userId, 'dispute', `disputed the proposed ${m.proposed_outcome} result`);
-    notifyAdmins(m.group_id, userId, marketId, 'dispute', `A member disputed “${m.question}”.`);
+    await logEvent(m.group_id, marketId, userId, 'dispute', `disputed the proposed ${proposedLabel} result`);
+    await notifyAdmins(m.group_id, userId, marketId, 'dispute', `A member disputed “${m.question}”.`);
   });
 }
 
-export function finalizeResolution(userId: number, marketId: number) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireAdmin(userId, m.group_id);
+export async function finalizeResolution(userId: number, marketId: number) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  await requireAdmin(userId, m.group_id);
   if (m.status !== 'resolving' || !m.proposed_outcome) fail('There is no proposed result to finalize.');
-  const review = get<{ disputes: number; expired: number }>(
+  const review = (await get<{ disputes: number; expired: number }>(
     `SELECT (SELECT COUNT(*) FROM market_disputes WHERE market_id = m.id) AS disputes,
             m.dispute_ends_at <= datetime('now') AS expired FROM markets m WHERE m.id = ?`,
     marketId,
-  )!;
+  ))!;
   if (!review.expired && review.disputes === 0) fail('Members still have time to review this result.');
-  settleMarket(m, m.proposed_outcome, userId);
+  await settleMarket(m, m.proposed_outcome, userId);
 }
 
 /** Finalize undisputed proposals after their review period. Cheap; called on group reads. */
-export function sweepResolutions(groupId: number) {
-  const due = all<MarketRow>(
+export async function sweepResolutions(groupId: number) {
+  const due = await all<MarketRow>(
     `SELECT m.*, u.name AS creator_name, u.handle AS creator_handle
        FROM markets m JOIN users u ON u.id = m.creator_id
       WHERE m.group_id = ? AND m.status = 'resolving' AND m.dispute_ends_at <= datetime('now')
@@ -574,14 +822,14 @@ export function sweepResolutions(groupId: number) {
     groupId,
   );
   for (const m of due) {
-    if (m.proposed_outcome) settleMarket(m, m.proposed_outcome, m.resolution_proposed_by);
+    if (m.proposed_outcome) await settleMarket(m, m.proposed_outcome, m.resolution_proposed_by);
   }
 }
 
 // ─── trading ─────────────────────────────────────────────────────────────────
 
-function upsertPosition(marketId: number, userId: number) {
-  run(
+async function upsertPosition(marketId: number, userId: number) {
+  await run(
     'INSERT OR IGNORE INTO positions (market_id, user_id) VALUES (?, ?)',
     marketId,
     userId,
@@ -589,7 +837,7 @@ function upsertPosition(marketId: number, userId: number) {
 }
 
 export interface FillResult {
-  side: Side;
+  side: string;
   action: 'BUY' | 'SELL';
   shares: number;
   cash: number;
@@ -598,10 +846,176 @@ export interface FillResult {
   balance: number;
 }
 
-export function buy(userId: number, marketId: number, side: Side, amount: number): FillResult {
-  const m = marketById(marketId) ?? fail('Market not found.');
+async function requireEligibleTrader(userId: number, marketId: number) {
+  if (await marketRestrictionFor(userId, marketId)) {
+    fail('You are listed as connected to this outcome, so you cannot trade this market.');
+  }
+}
+
+export async function buyCategorical(
+  userId: number,
+  marketId: number,
+  optionId: number,
+  amount: number,
+): Promise<FillResult> {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  if (m.market_type !== 'categorical') fail('That is not a multiple-choice market.');
   if (m.status !== 'open') fail('This market is not open for trading.');
-  const ms = requireMember(userId, m.group_id);
+  const ms = await requireMember(userId, m.group_id);
+  await requireEligibleTrader(userId, marketId);
+  const spend = Math.round(Math.max(0, amount) * 100) / 100;
+  if (spend <= 0) fail('Enter an amount.');
+  if (spend > ms.balance + 1e-9) fail('Not enough cash.');
+
+  const options = await marketOptions(marketId);
+  const optionIndex = options.findIndex((option) => option.id === optionId);
+  if (optionIndex < 0) fail('Choose a valid outcome.');
+  const quote = quoteCategoricalBuy(categoricalState(m, options), optionIndex, spend);
+  if (!(quote.shares > 0)) fail('That order is too small to fill.');
+
+  return tx(async () => {
+    await run(
+      `UPDATE markets SET collateral = collateral + ?, fees = fees + ?, volume = volume + ? WHERE id = ?`,
+      spend,
+      quote.fee,
+      spend,
+      marketId,
+    );
+    await run('UPDATE market_options SET quantity = ? WHERE id = ?', quote.quantitiesAfter[optionIndex], optionId);
+    await run('UPDATE memberships SET balance = balance - ? WHERE id = ?', spend, ms.id);
+    await run(
+      `INSERT INTO option_positions (market_id, option_id, user_id, shares, cost)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(option_id, user_id) DO UPDATE SET
+         shares = shares + excluded.shares, cost = cost + excluded.cost`,
+      marketId,
+      optionId,
+      userId,
+      quote.shares,
+      spend,
+    );
+    await run(
+      `INSERT INTO trades (market_id, user_id, side, option_id, action, shares, cash, avg_price, price_after)
+       VALUES (?, ?, ?, ?, 'BUY', ?, ?, ?, ?)`,
+      marketId,
+      userId,
+      options[optionIndex].label,
+      optionId,
+      quote.shares,
+      spend,
+      quote.avgPrice,
+      quote.priceAfter,
+    );
+    const updatedPrices = categoricalPrices({ ...categoricalState(m, options), quantities: quote.quantitiesAfter });
+    for (const [index, option] of options.entries()) {
+      await run('INSERT INTO option_price_points (option_id, price) VALUES (?, ?)', option.id, updatedPrices[index]);
+    }
+    await logEvent(
+      m.group_id,
+      marketId,
+      userId,
+      'trade',
+      `bought ${fmtShares(quote.shares)} ${options[optionIndex].label} on “${m.question}”`,
+    );
+    const balance = (await get<{ balance: number }>('SELECT balance FROM memberships WHERE id = ?', ms.id))!.balance;
+    return {
+      side: options[optionIndex].label,
+      action: 'BUY' as const,
+      shares: quote.shares,
+      cash: spend,
+      avgPrice: quote.avgPrice,
+      priceAfter: quote.priceAfter,
+      balance,
+    };
+  });
+}
+
+export async function sellCategorical(
+  userId: number,
+  marketId: number,
+  optionId: number,
+  sharesIn: number,
+): Promise<FillResult> {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  if (m.market_type !== 'categorical') fail('That is not a multiple-choice market.');
+  if (m.status !== 'open') fail('This market is not open for trading.');
+  const ms = await requireMember(userId, m.group_id);
+  await requireEligibleTrader(userId, marketId);
+  const options = await marketOptions(marketId);
+  const optionIndex = options.findIndex((option) => option.id === optionId);
+  if (optionIndex < 0) fail('Choose a valid outcome.');
+  const position = await get<{ shares: number; cost: number }>(
+    'SELECT shares, cost FROM option_positions WHERE option_id = ? AND user_id = ?',
+    optionId,
+    userId,
+  );
+  const held = position?.shares ?? 0;
+  const qty = Math.min(held, Math.max(0, sharesIn));
+  if (!(qty > 0.0001)) fail(`You have no ${options[optionIndex].label} shares to sell.`);
+  const quote = quoteCategoricalSell(categoricalState(m, options), optionIndex, qty);
+  if (!(quote.proceeds > 0)) fail('That order is too small to fill.');
+
+  return tx(async () => {
+    await run(
+      `UPDATE markets SET collateral = collateral - ?, fees = fees + ?, volume = volume + ? WHERE id = ?`,
+      quote.proceeds,
+      quote.fee,
+      quote.proceeds,
+      marketId,
+    );
+    await run('UPDATE market_options SET quantity = ? WHERE id = ?', quote.quantitiesAfter[optionIndex], optionId);
+    await run('UPDATE memberships SET balance = balance + ? WHERE id = ?', quote.proceeds, ms.id);
+    const releasedCost = held > 0 ? ((position?.cost ?? 0) * qty) / held : 0;
+    await run(
+      `UPDATE option_positions SET shares = shares - ?, cost = cost - ?, realized = realized + ?
+        WHERE option_id = ? AND user_id = ?`,
+      qty,
+      releasedCost,
+      quote.proceeds - releasedCost,
+      optionId,
+      userId,
+    );
+    await run(
+      `INSERT INTO trades (market_id, user_id, side, option_id, action, shares, cash, avg_price, price_after)
+       VALUES (?, ?, ?, ?, 'SELL', ?, ?, ?, ?)`,
+      marketId,
+      userId,
+      options[optionIndex].label,
+      optionId,
+      qty,
+      quote.proceeds,
+      quote.avgPrice,
+      quote.priceAfter,
+    );
+    const updatedPrices = categoricalPrices({ ...categoricalState(m, options), quantities: quote.quantitiesAfter });
+    for (const [index, option] of options.entries()) {
+      await run('INSERT INTO option_price_points (option_id, price) VALUES (?, ?)', option.id, updatedPrices[index]);
+    }
+    await logEvent(
+      m.group_id,
+      marketId,
+      userId,
+      'trade',
+      `sold ${fmtShares(qty)} ${options[optionIndex].label} on “${m.question}”`,
+    );
+    const balance = (await get<{ balance: number }>('SELECT balance FROM memberships WHERE id = ?', ms.id))!.balance;
+    return {
+      side: options[optionIndex].label,
+      action: 'SELL' as const,
+      shares: qty,
+      cash: quote.proceeds,
+      avgPrice: quote.avgPrice,
+      priceAfter: quote.priceAfter,
+      balance,
+    };
+  });
+}
+
+export async function buy(userId: number, marketId: number, side: Side, amount: number): Promise<FillResult> {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  if (m.status !== 'open') fail('This market is not open for trading.');
+  const ms = await requireMember(userId, m.group_id);
+  await requireEligibleTrader(userId, marketId);
 
   const spend = Math.round(Math.max(0, amount) * 100) / 100;
   if (spend <= 0) fail('Enter an amount.');
@@ -610,8 +1024,8 @@ export function buy(userId: number, marketId: number, side: Side, amount: number
   const q = quoteBuy(reserves(m), side, spend);
   if (!(q.shares > 0)) fail('That order is too small to fill.');
 
-  return tx(() => {
-    run(
+  return tx(async () => {
+    await run(
       `UPDATE markets SET yes_reserve = ?, no_reserve = ?, collateral = collateral + ?,
               fees = fees + ?, volume = volume + ? WHERE id = ?`,
       q.reservesAfter.yes,
@@ -621,12 +1035,12 @@ export function buy(userId: number, marketId: number, side: Side, amount: number
       spend,
       marketId,
     );
-    run('UPDATE memberships SET balance = balance - ? WHERE id = ?', spend, ms.id);
+    await run('UPDATE memberships SET balance = balance - ? WHERE id = ?', spend, ms.id);
 
-    upsertPosition(marketId, userId);
+    await upsertPosition(marketId, userId);
     const col = side === 'YES' ? 'yes_shares' : 'no_shares';
     const costCol = side === 'YES' ? 'yes_cost' : 'no_cost';
-    run(
+    await run(
       `UPDATE positions SET ${col} = ${col} + ?, ${costCol} = ${costCol} + ? WHERE market_id = ? AND user_id = ?`,
       q.shares,
       spend,
@@ -635,7 +1049,7 @@ export function buy(userId: number, marketId: number, side: Side, amount: number
     );
 
     const after = priceYes(q.reservesAfter);
-    run(
+    await run(
       `INSERT INTO trades (market_id, user_id, side, action, shares, cash, avg_price, price_after)
        VALUES (?, ?, ?, 'BUY', ?, ?, ?, ?)`,
       marketId,
@@ -646,8 +1060,8 @@ export function buy(userId: number, marketId: number, side: Side, amount: number
       q.avgPrice,
       after,
     );
-    run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', marketId, after);
-    logEvent(
+    await run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', marketId, after);
+    await logEvent(
       m.group_id,
       marketId,
       userId,
@@ -655,7 +1069,7 @@ export function buy(userId: number, marketId: number, side: Side, amount: number
       `bought ${fmtShares(q.shares)} ${side} on “${m.question}”`,
     );
 
-    const balance = get<{ balance: number }>('SELECT balance FROM memberships WHERE id = ?', ms.id)!.balance;
+    const balance = (await get<{ balance: number }>('SELECT balance FROM memberships WHERE id = ?', ms.id))!.balance;
     return {
       side,
       action: 'BUY' as const,
@@ -668,12 +1082,13 @@ export function buy(userId: number, marketId: number, side: Side, amount: number
   });
 }
 
-export function sell(userId: number, marketId: number, side: Side, sharesIn: number): FillResult {
-  const m = marketById(marketId) ?? fail('Market not found.');
+export async function sell(userId: number, marketId: number, side: Side, sharesIn: number): Promise<FillResult> {
+  const m = await marketById(marketId) ?? fail('Market not found.');
   if (m.status !== 'open') fail('This market is not open for trading.');
-  const ms = requireMember(userId, m.group_id);
+  const ms = await requireMember(userId, m.group_id);
+  await requireEligibleTrader(userId, marketId);
 
-  const pos = get<{ yes_shares: number; no_shares: number; yes_cost: number; no_cost: number }>(
+  const pos = await get<{ yes_shares: number; no_shares: number; yes_cost: number; no_cost: number }>(
     'SELECT yes_shares, no_shares, yes_cost, no_cost FROM positions WHERE market_id = ? AND user_id = ?',
     marketId,
     userId,
@@ -687,8 +1102,8 @@ export function sell(userId: number, marketId: number, side: Side, sharesIn: num
   const q = quoteSell(reserves(m), side, qty);
   if (!(q.proceeds > 0)) fail('That order is too small to fill.');
 
-  return tx(() => {
-    run(
+  return tx(async () => {
+    await run(
       `UPDATE markets SET yes_reserve = ?, no_reserve = ?, collateral = collateral - ?,
               fees = fees + ?, volume = volume + ? WHERE id = ?`,
       q.reservesAfter.yes,
@@ -698,13 +1113,13 @@ export function sell(userId: number, marketId: number, side: Side, sharesIn: num
       q.proceeds,
       marketId,
     );
-    run('UPDATE memberships SET balance = balance + ? WHERE id = ?', q.proceeds, ms.id);
+    await run('UPDATE memberships SET balance = balance + ? WHERE id = ?', q.proceeds, ms.id);
 
     // Release cost basis proportionally so avg price survives a partial sell.
     const releasedCost = held > 0 ? (basis * qty) / held : 0;
     const col = side === 'YES' ? 'yes_shares' : 'no_shares';
     const costCol = side === 'YES' ? 'yes_cost' : 'no_cost';
-    run(
+    await run(
       `UPDATE positions SET ${col} = ${col} - ?, ${costCol} = ${costCol} - ?, realized = realized + ?
         WHERE market_id = ? AND user_id = ?`,
       qty,
@@ -715,7 +1130,7 @@ export function sell(userId: number, marketId: number, side: Side, sharesIn: num
     );
 
     const after = priceYes(q.reservesAfter);
-    run(
+    await run(
       `INSERT INTO trades (market_id, user_id, side, action, shares, cash, avg_price, price_after)
        VALUES (?, ?, ?, 'SELL', ?, ?, ?, ?)`,
       marketId,
@@ -726,8 +1141,8 @@ export function sell(userId: number, marketId: number, side: Side, sharesIn: num
       q.avgPrice,
       after,
     );
-    run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', marketId, after);
-    logEvent(
+    await run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', marketId, after);
+    await logEvent(
       m.group_id,
       marketId,
       userId,
@@ -735,7 +1150,7 @@ export function sell(userId: number, marketId: number, side: Side, sharesIn: num
       `sold ${fmtShares(qty)} ${side} on “${m.question}”`,
     );
 
-    const balance = get<{ balance: number }>('SELECT balance FROM memberships WHERE id = ?', ms.id)!.balance;
+    const balance = (await get<{ balance: number }>('SELECT balance FROM memberships WHERE id = ?', ms.id))!.balance;
     return {
       side,
       action: 'SELL' as const,
@@ -748,10 +1163,10 @@ export function sell(userId: number, marketId: number, side: Side, sharesIn: num
   });
 }
 
-export function postComment(userId: number, marketId: number, body: string) {
-  const m = marketById(marketId) ?? fail('Market not found.');
-  requireMember(userId, m.group_id);
+export async function postComment(userId: number, marketId: number, body: string) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  await requireMember(userId, m.group_id);
   const text = body.trim().slice(0, 600);
   if (!text) fail('Say something first.');
-  run('INSERT INTO comments (market_id, user_id, body) VALUES (?, ?, ?)', marketId, userId, text);
+  await run('INSERT INTO comments (market_id, user_id, body) VALUES (?, ?, ?)', marketId, userId, text);
 }

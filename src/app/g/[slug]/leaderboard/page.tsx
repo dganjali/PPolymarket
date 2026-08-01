@@ -6,8 +6,11 @@ import { Avatar } from '@/components/ui';
 export default async function LeaderboardPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const { user, group } = await groupContext(slug);
-  const rows = standings(group.id, group.starting_balance);
-  const champions = seasonHistory(group.id).filter((row) => row.rank === 1);
+  const [rows, history] = await Promise.all([
+    standings(group.id, group.starting_balance),
+    seasonHistory(group.id),
+  ]);
+  const champions = history.filter((row) => row.rank === 1);
 
   const daysLeft = group.season_ends
     ? Math.max(0, Math.ceil((Date.parse(group.season_ends) - Date.now()) / 86_400_000))

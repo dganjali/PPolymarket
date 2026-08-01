@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
     });
     if (!profileResponse.ok) return fail();
     const profile = await profileResponse.json() as GoogleUserInfo;
-    const user = upsertGoogleUser({
+    const user = await upsertGoogleUser({
       sub: profile.sub || '',
       email: profile.email || '',
       emailVerified: profile.email_verified === true,

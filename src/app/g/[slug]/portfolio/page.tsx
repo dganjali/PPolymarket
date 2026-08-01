@@ -8,15 +8,17 @@ export default async function PortfolioPage({ params }: { params: Promise<{ slug
   const { slug } = await params;
   const { user, group, ms, base } = await groupContext(slug);
 
-  const legs = openLegs(user.id, group.id);
-  const rows = standings(group.id, group.starting_balance);
+  const [legs, rows] = await Promise.all([
+    openLegs(user.id, group.id),
+    standings(group.id, group.starting_balance),
+  ]);
   const rank = rows.findIndex((r) => r.userId === user.id) + 1;
   const mine = rows[rank - 1];
   const invested = mine?.invested ?? 0;
   const total = ms.balance + invested;
   const pnl = total - group.starting_balance;
 
-  const settled = all<{
+  const settledBinary = await all<{
     id: number; question: string; outcome: string; realized: number; resolved_at: string;
   }>(
     `SELECT m.id, m.question, m.outcome, p.realized, m.resolved_at
@@ -27,6 +29,21 @@ export default async function PortfolioPage({ params }: { params: Promise<{ slug
     group.id,
     group.current_season,
   );
+  const settledCategorical = await all<{
+    id: number; question: string; outcome: string; realized: number; resolved_at: string;
+  }>(
+    `SELECT m.id, m.question, winner.label AS outcome, SUM(p.realized) AS realized, m.resolved_at
+       FROM option_positions p JOIN markets m ON m.id = p.market_id
+       LEFT JOIN market_options winner ON winner.id = CAST(m.outcome AS INTEGER)
+      WHERE p.user_id = ? AND m.group_id = ? AND m.season_number = ? AND m.status = 'resolved'
+      GROUP BY m.id ORDER BY m.resolved_at DESC LIMIT 25`,
+    user.id,
+    group.id,
+    group.current_season,
+  );
+  const settled = [...settledBinary, ...settledCategorical]
+    .sort((a, b) => b.resolved_at.localeCompare(a.resolved_at))
+    .slice(0, 25);
 
   return (
     <div className="wrap narrow" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -82,7 +99,7 @@ export default async function PortfolioPage({ params }: { params: Promise<{ slug
             const up = leg.value >= leg.cost;
             return (
               <Link
-                key={`${leg.market.id}-${leg.side}`}
+                key={`${leg.market.id}-${leg.optionId ?? leg.side}`}
                 href={`${base}/m/${leg.market.id}`}
                 className="card"
                 style={{ padding: 13, display: 'block' }}
@@ -97,8 +114,8 @@ export default async function PortfolioPage({ params }: { params: Promise<{ slug
                       fontSize: 10,
                       fontWeight: 600,
                       letterSpacing: '0.05em',
-                      background: leg.side === 'YES' ? 'var(--yes-bg)' : 'var(--no-bg)',
-                      color: leg.side === 'YES' ? 'var(--yes-hi)' : 'var(--no-hi)',
+                      background: leg.market.market_type === 'categorical' ? 'var(--gold-bg)' : leg.side === 'YES' ? 'var(--yes-bg)' : 'var(--no-bg)',
+                      color: leg.market.market_type === 'categorical' ? 'var(--gold)' : leg.side === 'YES' ? 'var(--yes-hi)' : 'var(--no-hi)',
                     }}
                   >
                     {leg.side}
@@ -155,8 +172,8 @@ export default async function PortfolioPage({ params }: { params: Promise<{ slug
                     borderRadius: 5,
                     fontSize: 9.5,
                     fontWeight: 600,
-                    background: s.outcome === 'YES' ? 'var(--yes-bg)' : 'var(--no-bg)',
-                    color: s.outcome === 'YES' ? 'var(--yes-hi)' : 'var(--no-hi)',
+                    background: s.outcome === 'YES' ? 'var(--yes-bg)' : s.outcome === 'NO' ? 'var(--no-bg)' : 'var(--gold-bg)',
+                    color: s.outcome === 'YES' ? 'var(--yes-hi)' : s.outcome === 'NO' ? 'var(--no-hi)' : 'var(--gold)',
                   }}
                 >
                   {s.outcome}

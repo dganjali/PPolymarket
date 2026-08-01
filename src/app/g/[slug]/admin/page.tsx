@@ -2,10 +2,10 @@ import { headers } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { groupContext } from '@/lib/context';
-import { marketDisputes, marketsByGroup, standings } from '@/lib/data';
+import { marketDisputes, marketOptions, marketsByGroup, membershipRequests, standings } from '@/lib/data';
 import { dateLabel, money0, relative, volLabel } from '@/lib/format';
 import { AdminMarketControls } from '@/components/AdminControls';
-import { InviteCode, MemberList, SeasonControls, SettingsForm, StakesEditor } from '@/components/AdminPanels';
+import { InviteCode, MemberList, MembershipRequests, SeasonControls, SettingsForm, StakesEditor } from '@/components/AdminPanels';
 
 export default async function AdminPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -17,16 +17,20 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
   const proto = h.get('x-forwarded-proto') ?? 'http';
   const origin = host ? `${proto}://${host}` : undefined;
 
-  const pending = marketsByGroup(group.id, ['pending']);
-  const resolvable = marketsByGroup(group.id, ['resolving', 'closed', 'open']);
-  const resolvableRows = resolvable.map((market) => {
-    const disputes = market.status === 'resolving' ? marketDisputes(market.id).length : 0;
+  const [pending, resolvable, members, joinRequests] = await Promise.all([
+    marketsByGroup(group.id, ['pending']),
+    marketsByGroup(group.id, ['resolving', 'closed', 'open']),
+    standings(group.id, group.starting_balance),
+    membershipRequests(group.id),
+  ]);
+  const resolvableRows = await Promise.all(resolvable.map(async (market) => {
+    const disputes = market.status === 'resolving' ? (await marketDisputes(market.id)).length : 0;
     const reviewOpen =
       !!market.dispute_ends_at &&
       new Date(`${market.dispute_ends_at.replace(' ', 'T')}Z`).getTime() > Date.now();
-    return { market, disputes, canFinalize: disputes > 0 || !reviewOpen };
-  });
-  const members = standings(group.id, group.starting_balance);
+    const options = market.market_type === 'categorical' ? await marketOptions(market.id) : [];
+    return { market, disputes, canFinalize: disputes > 0 || !reviewOpen, options };
+  }));
 
   return (
     <div className="wrap narrow" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -50,6 +54,8 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
       </div>
 
       <StakesEditor slug={slug} prize={group.prize} punishment={group.punishment} />
+
+      <MembershipRequests slug={slug} requests={joinRequests} />
 
       <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -83,7 +89,7 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
 
       <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div className="eyebrow">Resolve markets</div>
-        {resolvableRows.map(({ market: m, disputes, canFinalize }) => (
+        {resolvableRows.map(({ market: m, disputes, canFinalize, options }) => (
           <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
             <Link href={`${base}/m/${m.id}`} style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>
               {m.question}
@@ -99,6 +105,11 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
               proposedOutcome={m.proposed_outcome}
               disputeCount={disputes}
               canFinalize={canFinalize}
+              resolutionOutcomes={
+                m.market_type === 'categorical'
+                    ? options.map((option) => ({ value: String(option.id), label: option.label }))
+                  : undefined
+              }
               compact
             />
           </div>
@@ -123,6 +134,7 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         disputeWindowHours={group.dispute_window_hours}
         positionsPublic={!!group.positions_public}
         requireApproval={!!group.require_approval}
+        requireMemberApproval={!!group.require_member_approval}
       />
 
       {user.id === group.owner_id && (

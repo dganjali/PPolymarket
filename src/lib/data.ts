@@ -1,5 +1,6 @@
 import { all, get } from './db';
 import { priceYes, type Reserves, type Side } from './amm';
+import { categoricalPrices, type CategoricalState } from './categorical';
 
 export interface GroupRow {
   id: number;
@@ -14,6 +15,7 @@ export interface GroupRow {
   punishment: string;
   positions_public: number;
   require_approval: number;
+  require_member_approval: number;
   dispute_window_hours: number;
   current_season: number;
   season_started_at: string;
@@ -30,8 +32,9 @@ export interface MarketRow {
   rules: string;
   closes_at: string;
   status: 'pending' | 'open' | 'closed' | 'resolving' | 'resolved' | 'rejected';
-  outcome: Side | null;
-  proposed_outcome: Side | null;
+  market_type: 'binary' | 'categorical';
+  outcome: string | null;
+  proposed_outcome: string | null;
   resolution_evidence: string;
   resolution_proposed_by: number | null;
   resolution_proposed_at: string | null;
@@ -45,6 +48,7 @@ export interface MarketRow {
   house: number;
   volume: number;
   open_price: number;
+  lmsr_b: number;
   created_at: string;
   resolved_at: string | null;
 }
@@ -58,19 +62,29 @@ export interface MembershipRow {
   joined_at: string;
 }
 
+export interface MarketRestrictionRow {
+  id: number;
+  market_id: number;
+  user_id: number;
+  reason: string;
+  created_at: string;
+  name: string;
+  handle: string;
+}
+
 const MARKET_COLS = `
   m.*, u.name AS creator_name, u.handle AS creator_handle
   FROM markets m JOIN users u ON u.id = m.creator_id`;
 
-export function groupBySlug(slug: string): GroupRow | undefined {
+export async function groupBySlug(slug: string): Promise<GroupRow | undefined> {
   return get<GroupRow>('SELECT * FROM groups WHERE slug = ?', slug);
 }
 
-export function groupByCode(code: string): GroupRow | undefined {
+export async function groupByCode(code: string): Promise<GroupRow | undefined> {
   return get<GroupRow>('SELECT * FROM groups WHERE invite_code = ?', code.trim().toUpperCase());
 }
 
-export function membership(userId: number, groupId: number): MembershipRow | undefined {
+export async function membership(userId: number, groupId: number): Promise<MembershipRow | undefined> {
   return get<MembershipRow>(
     'SELECT * FROM memberships WHERE user_id = ? AND group_id = ?',
     userId,
@@ -78,11 +92,11 @@ export function membership(userId: number, groupId: number): MembershipRow | und
   );
 }
 
-export function memberCount(groupId: number): number {
-  return get<{ n: number }>('SELECT COUNT(*) AS n FROM memberships WHERE group_id = ?', groupId)!.n;
+export async function memberCount(groupId: number): Promise<number> {
+  return (await get<{ n: number }>('SELECT COUNT(*) AS n FROM memberships WHERE group_id = ?', groupId))!.n;
 }
 
-export function myGroups(userId: number) {
+export async function myGroups(userId: number) {
   return all<GroupRow & { role: string; balance: number; members: number }>(
     `SELECT g.*, ms.role, ms.balance,
             (SELECT COUNT(*) FROM memberships x WHERE x.group_id = g.id) AS members
@@ -93,11 +107,30 @@ export function myGroups(userId: number) {
   );
 }
 
-export function marketById(id: number): MarketRow | undefined {
+export async function marketById(id: number): Promise<MarketRow | undefined> {
   return get<MarketRow>(`SELECT ${MARKET_COLS} WHERE m.id = ?`, id);
 }
 
-export function marketsByGroup(groupId: number, statuses: string[]): MarketRow[] {
+export async function marketRestrictions(marketId: number): Promise<MarketRestrictionRow[]> {
+  return all<MarketRestrictionRow>(
+    `SELECT r.*, u.name, u.handle FROM market_restrictions r
+       JOIN users u ON u.id = r.user_id
+      WHERE r.market_id = ? ORDER BY u.name, u.handle`,
+    marketId,
+  );
+}
+
+export async function marketRestrictionFor(userId: number, marketId: number): Promise<MarketRestrictionRow | undefined> {
+  return get<MarketRestrictionRow>(
+    `SELECT r.*, u.name, u.handle FROM market_restrictions r
+       JOIN users u ON u.id = r.user_id
+      WHERE r.user_id = ? AND r.market_id = ?`,
+    userId,
+    marketId,
+  );
+}
+
+export async function marketsByGroup(groupId: number, statuses: string[]): Promise<MarketRow[]> {
   const marks = statuses.map(() => '?').join(',');
   return all<MarketRow>(
     `SELECT ${MARKET_COLS} JOIN groups g ON g.id = m.group_id
@@ -113,8 +146,8 @@ export function reserves(m: Pick<MarketRow, 'yes_reserve' | 'no_reserve'>): Rese
 }
 
 /** Chronological price series for a market, oldest first, normalised 0..1. */
-export function priceSeries(marketId: number, limit = 40): number[] {
-  const rows = all<{ price: number }>(
+export async function priceSeries(marketId: number, limit = 40): Promise<number[]> {
+  const rows = await all<{ price: number }>(
     'SELECT price FROM (SELECT price, id FROM price_points WHERE market_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id',
     marketId,
     limit,
@@ -122,9 +155,9 @@ export function priceSeries(marketId: number, limit = 40): number[] {
   return rows.map((r) => r.price);
 }
 
-export function priceSeriesFor(marketIds: number[], limit = 16): Map<number, number[]> {
+export async function priceSeriesFor(marketIds: number[], limit = 16): Promise<Map<number, number[]>> {
   const out = new Map<number, number[]>();
-  for (const id of marketIds) out.set(id, priceSeries(id, limit));
+  await Promise.all(marketIds.map(async (id) => out.set(id, await priceSeries(id, limit))));
   return out;
 }
 
@@ -139,13 +172,14 @@ export interface PositionRow {
   realized: number;
 }
 
-export function positionFor(userId: number, marketId: number): PositionRow | undefined {
+export async function positionFor(userId: number, marketId: number): Promise<PositionRow | undefined> {
   return get<PositionRow>('SELECT * FROM positions WHERE user_id = ? AND market_id = ?', userId, marketId);
 }
 
 export interface OpenPosition {
   market: MarketRow;
-  side: Side;
+  side: string;
+  optionId?: number;
   shares: number;
   cost: number;
   price: number;
@@ -153,8 +187,8 @@ export interface OpenPosition {
 }
 
 /** Every open leg the user holds in a group, split by side, richest first. */
-export function openLegs(userId: number, groupId: number): OpenPosition[] {
-  const rows = all<MarketRow & Pick<PositionRow, 'yes_shares' | 'no_shares' | 'yes_cost' | 'no_cost'>>(
+export async function openLegs(userId: number, groupId: number): Promise<OpenPosition[]> {
+  const rows = await all<MarketRow & Pick<PositionRow, 'yes_shares' | 'no_shares' | 'yes_cost' | 'no_cost'>>(
     `SELECT m.*, u.name AS creator_name, u.handle AS creator_handle,
             p.yes_shares, p.no_shares, p.yes_cost, p.no_cost
        FROM positions p
@@ -178,6 +212,35 @@ export function openLegs(userId: number, groupId: number): OpenPosition[] {
       legs.push({ market: m, side: 'NO', shares: m.no_shares, cost: m.no_cost, price: 1 - py, value: m.no_shares * (1 - py) });
     }
   }
+
+  const optionRows = await all<MarketRow & { option_id: number; option_label: string; shares: number; cost: number; quantity: number }>(
+    `SELECT m.*, u.name AS creator_name, u.handle AS creator_handle,
+            op.option_id, o.label AS option_label, op.shares, op.cost, o.quantity
+       FROM option_positions op
+       JOIN market_options o ON o.id = op.option_id
+       JOIN markets m ON m.id = op.market_id
+       JOIN users u ON u.id = m.creator_id
+       JOIN groups g ON g.id = m.group_id
+      WHERE op.user_id = ? AND m.group_id = ? AND m.season_number = g.current_season
+        AND m.status IN ('open','closed','resolving') AND op.shares > 0.0001`,
+    userId,
+    groupId,
+  );
+  const optionMarkets = new Map<number, Awaited<ReturnType<typeof optionsWithPrices>>>();
+  for (const row of optionRows) {
+    const prices = optionMarkets.get(row.id) ?? await optionsWithPrices(row);
+    optionMarkets.set(row.id, prices);
+    const price = prices.find((option) => option.id === row.option_id)?.price ?? 0;
+    legs.push({
+      market: row,
+      side: row.option_label,
+      optionId: row.option_id,
+      shares: row.shares,
+      cost: row.cost,
+      price,
+      value: row.shares * price,
+    });
+  }
   return legs.sort((a, b) => b.value - a.value);
 }
 
@@ -195,15 +258,15 @@ export interface Standing {
 }
 
 /** Portfolio value for every member: cash plus mark-to-market on open legs. */
-export function standings(groupId: number, startingBalance: number): Standing[] {
-  const members = all<{ user_id: number; name: string; handle: string; role: string; balance: number }>(
+export async function standings(groupId: number, startingBalance: number): Promise<Standing[]> {
+  const members = await all<{ user_id: number; name: string; handle: string; role: string; balance: number }>(
     `SELECT ms.user_id, ms.role, ms.balance, u.name, u.handle
        FROM memberships ms JOIN users u ON u.id = ms.user_id
       WHERE ms.group_id = ?`,
     groupId,
   );
 
-  const live = all<PositionRow & { yes_reserve: number; no_reserve: number }>(
+  const live = await all<PositionRow & { yes_reserve: number; no_reserve: number }>(
     `SELECT p.*, m.yes_reserve, m.no_reserve FROM positions p JOIN markets m ON m.id = p.market_id
        JOIN groups g ON g.id = m.group_id
       WHERE m.group_id = ? AND m.season_number = g.current_season AND m.status IN ('open','closed','resolving')`,
@@ -211,7 +274,7 @@ export function standings(groupId: number, startingBalance: number): Standing[] 
   );
 
   const tradeCounts = new Map<number, number>();
-  for (const t of all<{ user_id: number; n: number }>(
+  for (const t of await all<{ user_id: number; n: number }>(
     `SELECT t.user_id, COUNT(*) AS n FROM trades t JOIN markets m ON m.id = t.market_id
        JOIN groups g ON g.id = m.group_id
       WHERE m.group_id = ? AND m.season_number = g.current_season GROUP BY t.user_id`,
@@ -228,6 +291,24 @@ export function standings(groupId: number, startingBalance: number): Standing[] 
     if (v <= 0.0001) continue;
     invested.set(p.user_id, (invested.get(p.user_id) ?? 0) + v);
     openCount.set(p.user_id, (openCount.get(p.user_id) ?? 0) + 1);
+  }
+
+  const categoricalLive = await all<{ user_id: number; market_id: number; option_id: number; shares: number; lmsr_b: number }>(
+    `SELECT op.user_id, op.market_id, op.option_id, op.shares, m.lmsr_b
+       FROM option_positions op JOIN markets m ON m.id = op.market_id
+       JOIN groups g ON g.id = m.group_id
+      WHERE m.group_id = ? AND m.season_number = g.current_season
+        AND m.status IN ('open','closed','resolving') AND op.shares > 0.0001`,
+    groupId,
+  );
+  const categoricalMarkets = new Map<number, Awaited<ReturnType<typeof optionsWithPrices>>>();
+  for (const position of categoricalLive) {
+    const prices = categoricalMarkets.get(position.market_id) ?? await optionsWithPrices({ id: position.market_id, lmsr_b: position.lmsr_b });
+    categoricalMarkets.set(position.market_id, prices);
+    const price = prices.find((option) => option.id === position.option_id)?.price ?? 0;
+    const value = position.shares * price;
+    invested.set(position.user_id, (invested.get(position.user_id) ?? 0) + value);
+    openCount.set(position.user_id, (openCount.get(position.user_id) ?? 0) + 1);
   }
 
   return members
@@ -259,7 +340,7 @@ export interface EventRow {
   market_id: number | null;
 }
 
-export function events(groupId: number, limit = 40): EventRow[] {
+export async function events(groupId: number, limit = 40): Promise<EventRow[]> {
   return all<EventRow>(
     `SELECT e.id, e.kind, e.body, e.created_at, e.market_id, u.name AS user_name
        FROM events e LEFT JOIN users u ON u.id = e.user_id
@@ -275,7 +356,7 @@ export interface HolderRow {
   shares: number;
 }
 
-export function holders(marketId: number, side: Side, limit = 5): HolderRow[] {
+export async function holders(marketId: number, side: Side, limit = 5): Promise<HolderRow[]> {
   const col = side === 'YES' ? 'yes_shares' : 'no_shares';
   return all<HolderRow>(
     `SELECT u.name, u.handle, p.${col} AS shares FROM positions p JOIN users u ON u.id = p.user_id
@@ -285,11 +366,11 @@ export function holders(marketId: number, side: Side, limit = 5): HolderRow[] {
   );
 }
 
-export function marketTraderCount(marketId: number): number {
-  return get<{ n: number }>(
+export async function marketTraderCount(marketId: number): Promise<number> {
+  return (await get<{ n: number }>(
     'SELECT COUNT(DISTINCT user_id) AS n FROM trades WHERE market_id = ?',
     marketId,
-  )!.n;
+  ))!.n;
 }
 
 export interface CommentRow {
@@ -298,6 +379,79 @@ export interface CommentRow {
   created_at: string;
   name: string;
   handle: string;
+}
+
+export async function optionHolders(optionId: number, limit = 5): Promise<HolderRow[]> {
+  return all<HolderRow>(
+    `SELECT u.name, u.handle, p.shares FROM option_positions p JOIN users u ON u.id = p.user_id
+      WHERE p.option_id = ? AND p.shares > 0.0001 ORDER BY p.shares DESC LIMIT ?`,
+    optionId,
+    limit,
+  );
+}
+
+export interface MarketOptionRow {
+  id: number;
+  market_id: number;
+  label: string;
+  sort_order: number;
+  quantity: number;
+}
+
+export async function marketOptions(marketId: number): Promise<MarketOptionRow[]> {
+  return all<MarketOptionRow>(
+    'SELECT * FROM market_options WHERE market_id = ? ORDER BY sort_order',
+    marketId,
+  );
+}
+
+export function categoricalState(
+  market: Pick<MarketRow, 'id' | 'lmsr_b'>,
+  options: MarketOptionRow[],
+): CategoricalState {
+  return { quantities: options.map((option) => option.quantity), liquidity: market.lmsr_b };
+}
+
+export async function optionsWithPrices(market: Pick<MarketRow, 'id' | 'lmsr_b'>) {
+  const options = await marketOptions(market.id);
+  const prices = categoricalPrices(categoricalState(market, options));
+  return options.map((option, index) => ({ ...option, price: prices[index] }));
+}
+
+export interface OptionPositionRow {
+  id: number;
+  market_id: number;
+  option_id: number;
+  user_id: number;
+  shares: number;
+  cost: number;
+  realized: number;
+}
+
+export async function optionPositionFor(userId: number, marketId: number): Promise<OptionPositionRow[]> {
+  return all<OptionPositionRow>(
+    'SELECT * FROM option_positions WHERE user_id = ? AND market_id = ? AND shares > 0.0001',
+    userId,
+    marketId,
+  );
+}
+
+export interface MembershipRequestRow {
+  id: number;
+  user_id: number;
+  group_id: number;
+  requested_at: string;
+  name: string;
+  handle: string;
+  email: string | null;
+}
+
+export async function membershipRequests(groupId: number): Promise<MembershipRequestRow[]> {
+  return all<MembershipRequestRow>(
+    `SELECT r.*, u.name, u.handle, u.email FROM membership_requests r
+       JOIN users u ON u.id = r.user_id WHERE r.group_id = ? ORDER BY r.id`,
+    groupId,
+  );
 }
 
 export interface DisputeRow {
@@ -310,7 +464,7 @@ export interface DisputeRow {
   handle: string;
 }
 
-export function marketDisputes(marketId: number): DisputeRow[] {
+export async function marketDisputes(marketId: number): Promise<DisputeRow[]> {
   return all<DisputeRow>(
     `SELECT d.*, u.name, u.handle FROM market_disputes d
        JOIN users u ON u.id = d.user_id
@@ -319,7 +473,7 @@ export function marketDisputes(marketId: number): DisputeRow[] {
   );
 }
 
-export function disputeFor(userId: number, marketId: number): DisputeRow | undefined {
+export async function disputeFor(userId: number, marketId: number): Promise<DisputeRow | undefined> {
   return get<DisputeRow>(
     `SELECT d.*, u.name, u.handle FROM market_disputes d
        JOIN users u ON u.id = d.user_id
@@ -329,7 +483,7 @@ export function disputeFor(userId: number, marketId: number): DisputeRow | undef
   );
 }
 
-export function comments(marketId: number, limit = 50): CommentRow[] {
+export async function comments(marketId: number, limit = 50): Promise<CommentRow[]> {
   return all<CommentRow>(
     `SELECT c.id, c.body, c.created_at, u.name, u.handle
        FROM comments c JOIN users u ON u.id = c.user_id
@@ -339,9 +493,9 @@ export function comments(marketId: number, limit = 50): CommentRow[] {
   );
 }
 
-export function recentTrades(marketId: number, limit = 12) {
+export async function recentTrades(marketId: number, limit = 12) {
   return all<{
-    id: number; side: Side; action: string; shares: number; cash: number;
+    id: number; side: string; action: string; shares: number; cash: number;
     avg_price: number; created_at: string; name: string;
   }>(
     `SELECT t.id, t.side, t.action, t.shares, t.cash, t.avg_price, t.created_at, u.name
@@ -364,7 +518,7 @@ export interface NotificationRow {
   group_name: string | null;
 }
 
-export function notifications(userId: number, limit = 60): NotificationRow[] {
+export async function notifications(userId: number, limit = 60): Promise<NotificationRow[]> {
   return all<NotificationRow>(
     `SELECT n.*, g.slug AS group_slug, g.name AS group_name
        FROM notifications n LEFT JOIN groups g ON g.id = n.group_id
@@ -374,11 +528,11 @@ export function notifications(userId: number, limit = 60): NotificationRow[] {
   );
 }
 
-export function unreadNotificationCount(userId: number): number {
-  return get<{ n: number }>(
+export async function unreadNotificationCount(userId: number): Promise<number> {
+  return (await get<{ n: number }>(
     'SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL',
     userId,
-  )!.n;
+  ))!.n;
 }
 
 export interface SeasonResultRow {
@@ -392,7 +546,7 @@ export interface SeasonResultRow {
   created_at: string;
 }
 
-export function seasonHistory(groupId: number): SeasonResultRow[] {
+export async function seasonHistory(groupId: number): Promise<SeasonResultRow[]> {
   return all<SeasonResultRow>(
     `SELECT r.*, u.name, u.handle FROM season_results r JOIN users u ON u.id = r.user_id
       WHERE r.group_id = ? ORDER BY r.season_number DESC, r.rank`,

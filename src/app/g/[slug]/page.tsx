@@ -17,11 +17,11 @@ export default async function MarketsPage({
   const { group, isAdmin, base } = await groupContext(slug);
 
   const statuses = show === 'resolved' ? ['resolved'] : ['open', 'closed', 'resolving'];
-  const all = marketsByGroup(group.id, statuses);
+  const all = await marketsByGroup(group.id, statuses);
   const markets = cat === 'All' ? all : all.filter((m) => m.category === cat);
-  const series = priceSeriesFor(markets.map((m) => m.id));
+  const series = await priceSeriesFor(markets.map((m) => m.id));
 
-  const feed = events(group.id, 6);
+  const feed = await events(group.id, 6);
   const catList = ['All', ...CATEGORIES.filter((c) => all.some((m) => m.category === c))];
 
   return (
@@ -154,8 +154,8 @@ export default async function MarketsPage({
   );
 }
 
-function PendingHint({ base, groupId }: { base: string; groupId: number }) {
-  const pending = marketsByGroup(groupId, ['pending']);
+async function PendingHint({ base, groupId }: { base: string; groupId: number }) {
+  const pending = await marketsByGroup(groupId, ['pending']);
   if (!pending.length) return null;
   return (
     <Link href={`${base}/admin`} className="notice" style={{ display: 'block' }}>

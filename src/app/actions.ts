@@ -8,6 +8,7 @@ import {
   AppError,
   approveMarket,
   buy,
+  buyCategorical,
   createGroup,
   createMarket,
   disputeResolution,
@@ -20,7 +21,9 @@ import {
   regenerateInviteCode,
   removeMember,
   reopenMarket,
+  reviewMembershipRequest,
   sell,
+  sellCategorical,
   setMemberRole,
   startNextSeason,
   updateGroup,
@@ -66,7 +69,7 @@ export async function signupAction(_prev: FormState, fd: FormData): Promise<Form
 
   let userId: number;
   try {
-    userId = createUser(handle, name, password, email).id;
+    userId = (await createUser(handle, name, password, email)).id;
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Could not create that account.' };
   }
@@ -75,7 +78,7 @@ export async function signupAction(_prev: FormState, fd: FormData): Promise<Form
 }
 
 export async function loginAction(_prev: FormState, fd: FormData): Promise<FormState> {
-  const user = authenticate(str(fd, 'identifier'), String(fd.get('password') ?? ''));
+  const user = await authenticate(str(fd, 'identifier'), String(fd.get('password') ?? ''));
   if (!user) return { error: 'Wrong email, handle, or password.' };
   await setSession(user.id);
   redirect(safeNext(str(fd, 'next') || '/'));
@@ -108,13 +111,16 @@ export async function joinGroupAction(_prev: FormState, fd: FormData): Promise<F
   const user = await me();
   const res = await guard(() => joinGroup(user.id, str(fd, 'code')));
   if ('error' in res) return res as FormState;
+  if ((res as { join_status: string }).join_status === 'pending') {
+    return { ok: 'Request sent. An admin must approve you before a bankroll is issued.' };
+  }
   redirect(`/g/${(res as { slug: string }).slug}`);
 }
 
 export async function updateStakesAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
 
   const mode = str(fd, 'mode') === 'punishment' ? 'punishment' : 'prize';
@@ -128,7 +134,7 @@ export async function updateStakesAction(_prev: FormState, fd: FormData): Promis
 export async function updateSettingsAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
 
   const res = await guard(() =>
@@ -138,6 +144,7 @@ export async function updateSettingsAction(_prev: FormState, fd: FormData): Prom
       dispute_window_hours: Math.max(1, Math.min(168, num(fd, 'disputeWindowHours') || group.dispute_window_hours)),
       positions_public: fd.get('positionsPublic') ? 1 : 0,
       require_approval: fd.get('requireApproval') ? 1 : 0,
+      require_member_approval: fd.get('requireMemberApproval') ? 1 : 0,
     }),
   );
   if (res && typeof res === 'object' && 'error' in res) return res as FormState;
@@ -151,7 +158,7 @@ export async function updateSettingsAction(_prev: FormState, fd: FormData): Prom
 export async function createMarketAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
 
   const days = Math.max(1, Math.min(365, num(fd, 'days') || 14));
@@ -165,6 +172,9 @@ export async function createMarketAction(_prev: FormState, fd: FormData): Promis
       closesAt,
       openPrice: (num(fd, 'openPrice') || 50) / 100,
       funding: num(fd, 'funding') || 25,
+      marketType: str(fd, 'marketType') === 'categorical' ? 'categorical' : 'binary',
+      options: fd.getAll('option').map((value) => String(value)),
+      excludedUserIds: fd.getAll('excludedUserId').map((value) => Number(value)),
     }),
   );
   if ('error' in res) return res as FormState;
@@ -182,6 +192,9 @@ export async function marketAdminAction(_prev: FormState, fd: FormData): Promise
   const op = str(fd, 'op');
 
   const res = await guard(() => {
+    if (op.startsWith('propose:')) {
+      return proposeResolution(user.id, marketId, op.slice('propose:'.length), str(fd, 'evidence'));
+    }
     switch (op) {
       case 'approve':
         return approveMarket(user.id, marketId);
@@ -212,7 +225,7 @@ export async function marketAdminAction(_prev: FormState, fd: FormData): Promise
     finalize: 'Result finalized. Payouts are in.',
     reopen: 'Reopened for another week.',
   };
-  return { ok: done[op] ?? 'Done.' };
+  return { ok: op.startsWith('propose:') ? 'Result proposed. Members can review the evidence and dispute it.' : done[op] ?? 'Done.' };
 }
 
 export async function disputeResolutionAction(_prev: FormState, fd: FormData): Promise<FormState> {
@@ -233,24 +246,41 @@ export async function tradeAction(_prev: FormState, fd: FormData): Promise<FormS
   const marketId = num(fd, 'marketId');
   const side = (str(fd, 'side') === 'NO' ? 'NO' : 'YES') as Side;
   const action = str(fd, 'action') === 'SELL' ? 'SELL' : 'BUY';
+  const optionId = num(fd, 'optionId');
 
   const res = await guard(() =>
-    action === 'BUY'
-      ? buy(user.id, marketId, side, num(fd, 'amount'))
-      : sell(user.id, marketId, side, num(fd, 'shares')),
+    optionId
+      ? action === 'BUY'
+        ? buyCategorical(user.id, marketId, optionId, num(fd, 'amount'))
+        : sellCategorical(user.id, marketId, optionId, num(fd, 'shares'))
+      : action === 'BUY'
+        ? buy(user.id, marketId, side, num(fd, 'amount'))
+        : sell(user.id, marketId, side, num(fd, 'shares')),
   );
   if ('error' in res) return res as FormState;
 
   revalidatePath(`/g/${slug}`, 'layout');
-  const fill = res as { shares: number; avgPrice: number; cash: number };
+  const fill = res as { shares: number; avgPrice: number; cash: number; side: string };
   const qty = Math.round(fill.shares).toLocaleString('en-US');
   const price = `${(fill.avgPrice * 100).toFixed(1)}¢`;
   return {
     ok:
       action === 'BUY'
-        ? `Filled — bought ${qty} ${side} @ ${price}.`
-        : `Filled — sold ${qty} ${side} @ ${price}.`,
+        ? `Filled — bought ${qty} ${fill.side} @ ${price}.`
+        : `Filled — sold ${qty} ${fill.side} @ ${price}.`,
   };
+}
+
+export async function membershipRequestAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+  const decision = str(fd, 'decision') === 'approve' ? 'approve' : 'reject';
+  const res = await guard(() => reviewMembershipRequest(user.id, group.id, num(fd, 'userId'), decision));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: decision === 'approve' ? 'Member approved and bankroll issued.' : 'Join request declined.' };
 }
 
 export async function commentAction(_prev: FormState, fd: FormData): Promise<FormState> {
@@ -264,7 +294,7 @@ export async function commentAction(_prev: FormState, fd: FormData): Promise<For
 export async function kickMemberAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
   const target = num(fd, 'userId');
 
@@ -278,7 +308,7 @@ export async function kickMemberAction(_prev: FormState, fd: FormData): Promise<
 export async function memberRoleAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
   const role = str(fd, 'role') === 'admin' ? 'admin' : 'member';
   const res = await guard(() => setMemberRole(user.id, group.id, num(fd, 'userId'), role));
@@ -290,7 +320,7 @@ export async function memberRoleAction(_prev: FormState, fd: FormData): Promise<
 export async function regenerateInviteAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
   const res = await guard(() => regenerateInviteCode(user.id, group.id));
   if (res && typeof res === 'object' && 'error' in res) return res as FormState;
@@ -300,14 +330,14 @@ export async function regenerateInviteAction(_prev: FormState, fd: FormData): Pr
 
 export async function markNotificationsReadAction() {
   const user = await me();
-  markNotificationsRead(user.id);
+  await markNotificationsRead(user.id);
   revalidatePath('/notifications');
 }
 
 export async function startNextSeasonAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
   const res = await guard(() => startNextSeason(user.id, group.id, str(fd, 'seasonEnds') || null));
   if (res && typeof res === 'object' && 'error' in res) return res as FormState;

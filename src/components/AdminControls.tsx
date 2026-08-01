@@ -2,7 +2,6 @@
 
 import { useActionState } from 'react';
 import { marketAdminAction, type FormState } from '@/app/actions';
-import type { Side } from '@/lib/amm';
 import { SubmitButton, Toast } from './ui';
 
 /** Market approval and evidence-backed resolution controls, scoped to one market. */
@@ -11,6 +10,7 @@ export function AdminMarketControls({
   marketId,
   status,
   proposedOutcome,
+  resolutionOutcomes,
   disputeCount = 0,
   canFinalize = true,
   compact = false,
@@ -18,12 +18,18 @@ export function AdminMarketControls({
   slug: string;
   marketId: number;
   status: string;
-  proposedOutcome?: Side | null;
+  proposedOutcome?: string | null;
+  resolutionOutcomes?: { value: string; label: string }[];
   disputeCount?: number;
   canFinalize?: boolean;
   compact?: boolean;
 }) {
   const [state, formAction] = useActionState(marketAdminAction, {} as FormState);
+  const choices = resolutionOutcomes ?? [
+    { value: 'YES', label: 'YES' },
+    { value: 'NO', label: 'NO' },
+  ];
+  const proposedLabel = choices.find((choice) => choice.value === proposedOutcome)?.label ?? proposedOutcome;
   const hidden = (
     <>
       <input type="hidden" name="slug" value={slug} />
@@ -57,7 +63,7 @@ export function AdminMarketControls({
           {status === 'resolving' && proposedOutcome && (
             <>
               <div className="notice">
-                Proposed <strong>{proposedOutcome}</strong> · {disputeCount} dispute{disputeCount === 1 ? '' : 's'}
+                Proposed <strong>{proposedLabel}</strong> · {disputeCount} dispute{disputeCount === 1 ? '' : 's'}
               </div>
               <form action={formAction} style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
                 {hidden}
@@ -70,7 +76,7 @@ export function AdminMarketControls({
                   disabled={!canFinalize}
                   title={!canFinalize ? 'Available after the member review window, or as soon as someone disputes.' : undefined}
                 >
-                  Finalize {proposedOutcome}
+                  Finalize {proposedLabel}
                 </SubmitButton>
                 <SubmitButton name="op" value="reopen" className="btn btn-sm btn-ghost" pendingLabel="…">
                   Reopen
@@ -96,12 +102,18 @@ export function AdminMarketControls({
               style={{ fontSize: 12.5 }}
             />
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-              <SubmitButton name="op" value="propose-yes" className="btn btn-sm pill-yes" style={{ flex: 1 }} pendingLabel="…">
-                {status === 'resolving' ? 'Revise to YES' : 'Propose YES'}
-              </SubmitButton>
-              <SubmitButton name="op" value="propose-no" className="btn btn-sm pill-no" style={{ flex: 1 }} pendingLabel="…">
-                {status === 'resolving' ? 'Revise to NO' : 'Propose NO'}
-              </SubmitButton>
+              {choices.map((choice, index) => (
+                <SubmitButton
+                  key={choice.value}
+                  name="op"
+                  value={`propose:${choice.value}`}
+                  className={`btn btn-sm ${choice.value === 'YES' ? 'pill-yes' : choice.value === 'NO' ? 'pill-no' : index === 0 ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{ flex: '1 1 140px' }}
+                  pendingLabel="…"
+                >
+                  {status === 'resolving' ? `Revise to ${choice.label}` : `Propose ${choice.label}`}
+                </SubmitButton>
+              ))}
             </div>
           </form>
 

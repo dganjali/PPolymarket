@@ -17,7 +17,7 @@ const KIND_COLOR: Record<string, string> = {
 export default async function ActivityPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const { group, base } = await groupContext(slug);
-  const feed = events(group.id, 100);
+  const feed = await events(group.id, 100);
 
   return (
     <div className="wrap narrow" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

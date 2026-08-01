@@ -15,7 +15,8 @@ export default async function JoinPage({
   const { code } = await searchParams;
   if (!user) redirect(`/login?next=${encodeURIComponent(`/join${code ? `?code=${code}` : ''}`)}`);
 
-  const preview = code ? groupByCode(code) : undefined;
+  const preview = code ? await groupByCode(code) : undefined;
+  const members = preview ? await memberCount(preview.id) : 0;
 
   return (
     <main className="auth" style={{ gap: 22 }}>
@@ -39,7 +40,7 @@ export default async function JoinPage({
             <div>
               <div style={{ fontSize: 15.5, fontWeight: 600 }}>{preview.name}</div>
               <div className="mono" style={{ fontSize: 11, color: 'var(--ink-5)', marginTop: 3 }}>
-                {memberCount(preview.id)} members
+                {members} members
               </div>
             </div>
           </div>

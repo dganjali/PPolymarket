@@ -29,10 +29,10 @@ const rand = () => {
 };
 const pick = <T>(xs: T[]): T => xs[Math.floor(rand() * xs.length)];
 
-function reset() {
+async function reset() {
   for (const t of ['events', 'comments', 'price_points', 'trades', 'positions', 'markets', 'memberships', 'groups', 'users']) {
-    run(`DELETE FROM ${t}`);
-    run('DELETE FROM sqlite_sequence WHERE name = ?', t);
+    await run(`DELETE FROM ${t}`);
+    await run('DELETE FROM sqlite_sequence WHERE name = ?', t);
   }
 }
 
@@ -139,9 +139,9 @@ const heldBy = (marketId: number, userId: number) =>
     .prepare('SELECT yes_shares, no_shares FROM positions WHERE market_id = ? AND user_id = ?')
     .get(marketId, userId) as { yes_shares: number; no_shares: number } | undefined;
 
-function simulate(marketId: number, traders: number[], target: number, count: number) {
+async function simulate(marketId: number, traders: number[], target: number, count: number) {
   for (let i = 0; i < count; i++) {
-    const m = marketById(marketId)!;
+    const m = (await marketById(marketId))!;
     const p = priceYes({ yes: m.yes_reserve, no: m.no_reserve });
 
     // Trade toward the target, harder the further the price has drifted from
@@ -156,7 +156,7 @@ function simulate(marketId: number, traders: number[], target: number, count: nu
     // silently skipped buy would let the price drift on the sells alone.
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        buy(pick(traders), marketId, side, amount);
+        await buy(pick(traders), marketId, side, amount);
         break;
       } catch {
         /* broke — ask someone else */
@@ -173,7 +173,7 @@ function simulate(marketId: number, traders: number[], target: number, count: nu
         const qty = exiting === 'YES' ? held?.yes_shares ?? 0 : held?.no_shares ?? 0;
         if (qty < 20) continue;
         try {
-          sell(other, marketId, exiting, qty * 0.4);
+          await sell(other, marketId, exiting, qty * 0.4);
           break;
         } catch {
           /* nothing sellable */
@@ -183,17 +183,17 @@ function simulate(marketId: number, traders: number[], target: number, count: nu
   }
 }
 
-function main() {
-  reset();
+async function main() {
+  await reset();
 
   const users = new Map<string, number>();
   for (const [handle, name] of PEOPLE) {
-    users.set(handle, createUser(handle, name, PASSWORD).id);
+    users.set(handle, (await createUser(handle, name, PASSWORD)).id);
   }
   const id = (h: string) => users.get(h)!;
 
   const seasonEnds = new Date(Date.now() + 42 * 86_400_000).toISOString().slice(0, 10);
-  const group = createGroup(id('dawson'), {
+  const group = await createGroup(id('dawson'), {
     name: "Ridgeview Class of '26",
     startingBalance: 2500,
     marketLiquidity: 600,
@@ -204,7 +204,7 @@ function main() {
   });
 
   for (const [handle] of PEOPLE) {
-    if (handle !== 'dawson') joinGroup(id(handle), group.invite_code);
+    if (handle !== 'dawson') await joinGroup(id(handle), group.invite_code);
   }
   const everyone = PEOPLE.map(([h]) => id(h));
 
@@ -212,7 +212,7 @@ function main() {
     new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 19).replace('T', ' ');
 
   for (const spec of MARKETS) {
-    const market = createMarket(id(spec.by), group, {
+    const market = await createMarket(id(spec.by), group, {
       question: spec.question,
       category: spec.category,
       rules: spec.rules,
@@ -221,12 +221,12 @@ function main() {
       funding: spec.funding,
     });
     // Members' markets land as proposals; the demo wants them live.
-    run("UPDATE markets SET status = 'open' WHERE id = ?", market.id);
-    simulate(market.id, everyone, spec.target, spec.trades);
+    await run("UPDATE markets SET status = 'open' WHERE id = ?", market.id);
+    await simulate(market.id, everyone, spec.target, spec.trades);
   }
 
   // One market that already ran its course, so the settled tab has something.
-  const past = createMarket(id('dawson'), group, {
+  const past = await createMarket(id('dawson'), group, {
     question: 'Homecoming float actually finishes',
     category: 'Traditions',
     rules: 'Resolves YES if the float rolls in the parade under its own power.',
@@ -234,11 +234,11 @@ function main() {
     openPrice: 0.45,
     funding: 50,
   });
-  simulate(past.id, everyone, 0.68, 14);
-  resolveMarket(id('dawson'), past.id, 'YES');
+  await simulate(past.id, everyone, 0.68, 14);
+  await resolveMarket(id('dawson'), past.id, 'YES');
 
   // And two waiting on the admin.
-  createMarket(id('kai'), group, {
+  await createMarket(id('kai'), group, {
     question: 'Will the senior prank get anyone suspended?',
     category: 'Drama',
     rules: 'Resolves YES on any suspension handed out for the prank, in or out of school.',
@@ -246,7 +246,7 @@ function main() {
     openPrice: 0.4,
     funding: 25,
   });
-  createMarket(id('nadia'), group, {
+  await createMarket(id('nadia'), group, {
     question: 'Does Ms. Reyes announce she is leaving?',
     category: 'School',
     rules: 'Resolves YES if she says so publicly before the last day of classes.',
@@ -260,12 +260,12 @@ function main() {
     .prepare('SELECT id FROM markets WHERE group_id = ? AND question LIKE ? LIMIT 1')
     .get(group.id, '%John ever get%') as { id: number } | undefined;
   if (drama) {
-    postComment(id('marcus'), drama.id, 'This price is generous and you all know it.');
-    postComment(id('elena'), drama.id, 'I was at the bonfire. I am not saying anything else.');
-    postComment(id('dawson'), drama.id, 'This market is defamation and I am leaving it open.');
+    await postComment(id('marcus'), drama.id, 'This price is generous and you all know it.');
+    await postComment(id('elena'), drama.id, 'I was at the bonfire. I am not saying anything else.');
+    await postComment(id('dawson'), drama.id, 'This market is defamation and I am leaving it open.');
   }
 
-  const fresh = groupBySlug(group.slug)!;
+  const fresh = (await groupBySlug(group.slug))!;
   const counts = db.prepare('SELECT COUNT(*) AS n FROM trades').get() as { n: number };
 
   console.log(`\n  Seeded “${fresh.name}”`);
@@ -276,4 +276,4 @@ function main() {
   console.log(`  Password     ${PASSWORD}\n`);
 }
 
-main();
+await main();

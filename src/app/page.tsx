@@ -10,8 +10,7 @@ export default async function HomePage() {
   const user = await currentUser();
   if (!user) redirect('/login');
 
-  const groups = myGroups(user.id);
-  const unread = unreadNotificationCount(user.id);
+  const [groups, unread] = await Promise.all([myGroups(user.id), unreadNotificationCount(user.id)]);
 
   return (
     <main className="auth" style={{ gap: 24, paddingTop: 56 }}>

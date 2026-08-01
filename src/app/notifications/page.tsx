@@ -8,8 +8,7 @@ import { relative } from '@/lib/format';
 export default async function NotificationsPage() {
   const user = await currentUser();
   if (!user) redirect('/login?next=/notifications');
-  const items = notifications(user.id);
-  const unread = unreadNotificationCount(user.id);
+  const [items, unread] = await Promise.all([notifications(user.id), unreadNotificationCount(user.id)]);
 
   return (
     <main className="auth" style={{ gap: 20, paddingTop: 40 }}>

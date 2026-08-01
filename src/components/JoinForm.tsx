@@ -28,6 +28,7 @@ export function JoinForm({ initialCode = '' }: { initialCode?: string }) {
       </div>
 
       {state.error && <div className="error">{state.error}</div>}
+      {state.ok && <div className="notice">{state.ok}</div>}
 
       <SubmitButton pendingLabel="Joining…">Join group</SubmitButton>
     </form>

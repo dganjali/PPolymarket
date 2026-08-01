@@ -1,0 +1,15 @@
+.git
+.next
+.npm-cache
+.vercel-cli-cache
+.vercel-cli-data
+.vercel-login.out.log
+.vercel-login.err.log
+.agents
+skills-lock.json
+%SystemDrive%
+.env.local
+.env.production.local
+node_modules
+data
+*.log

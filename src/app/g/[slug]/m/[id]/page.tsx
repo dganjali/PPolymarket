@@ -8,6 +8,8 @@ import {
   holders,
   marketById,
   marketDisputes,
+  marketRestrictionFor,
+  marketRestrictions,
   marketTraderCount,
   positionFor,
   priceSeries,
@@ -31,6 +33,8 @@ import { TradePanel } from '@/components/TradePanel';
 import { CommentBox } from '@/components/CommentBox';
 import { DisputeForm } from '@/components/DisputeForm';
 import { AdminMarketControls } from '@/components/AdminControls';
+import { CategoricalMarket } from '@/components/CategoricalMarket';
+import { ConflictNotice } from '@/components/ConflictNotice';
 import { Avatar } from '@/components/ui';
 
 export default async function MarketPage({
@@ -44,26 +48,46 @@ export default async function MarketPage({
   const { side } = await searchParams;
   const { user, group, ms, isAdmin, base } = await groupContext(slug);
 
-  const market = marketById(Number(id));
+  const market = await marketById(Number(id));
   if (!market || market.group_id !== group.id) notFound();
+
+  if (market.market_type === 'categorical') {
+    return (
+      <CategoricalMarket
+        slug={slug}
+        base={base}
+        market={market}
+        group={group}
+        user={user}
+        membership={ms}
+        isAdmin={isAdmin}
+      />
+    );
+  }
 
   const r = reserves(market);
   const p = priceYes(r);
-  const series = priceSeries(market.id, 60);
+  const [series, pos, restrictions, myRestriction, yesHolders, noHolders, trades, thread, disputes, myDispute, traderCount] =
+    await Promise.all([
+      priceSeries(market.id, 60),
+      positionFor(user.id, market.id),
+      marketRestrictions(market.id),
+      marketRestrictionFor(user.id, market.id),
+      holders(market.id, 'YES'),
+      holders(market.id, 'NO'),
+      recentTrades(market.id),
+      comments(market.id),
+      market.status === 'resolving' ? marketDisputes(market.id) : Promise.resolve([]),
+      market.status === 'resolving' ? disputeFor(user.id, market.id) : Promise.resolve(undefined),
+      marketTraderCount(market.id),
+    ]);
   const first = series.length > 1 ? series[0] : market.open_price;
   const delta = p - first;
 
-  const pos = positionFor(user.id, market.id);
   const held = { yes: pos?.yes_shares ?? 0, no: pos?.no_shares ?? 0 };
-  const tradable = market.status === 'open';
+  const tradable = market.status === 'open' && !myRestriction;
 
   const rows = ladder(r, 'YES');
-  const yesHolders = holders(market.id, 'YES');
-  const noHolders = holders(market.id, 'NO');
-  const trades = recentTrades(market.id);
-  const thread = comments(market.id);
-  const disputes = market.status === 'resolving' ? marketDisputes(market.id) : [];
-  const myDispute = market.status === 'resolving' ? disputeFor(user.id, market.id) : undefined;
   const reviewOpen = !!market.dispute_ends_at && new Date(`${market.dispute_ends_at.replace(' ', 'T')}Z`).getTime() > Date.now();
 
   return (
@@ -188,6 +212,8 @@ export default async function MarketPage({
             </div>
           )}
 
+          <ConflictNotice restrictions={restrictions} isRestricted={!!myRestriction} />
+
           {/* Liquidity pool + depth ladder */}
           <div className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -297,7 +323,7 @@ export default async function MarketPage({
               {market.rules || 'No extra rules — the admin calls it as they see it.'}
             </div>
             <div className="mono" style={{ fontSize: 10.5, color: 'var(--dim-2)', paddingTop: 6 }}>
-              Opened by @{market.creator_handle} · {marketTraderCount(market.id)} traders ·{' '}
+              Opened by @{market.creator_handle} · {traderCount} traders ·{' '}
               {volLabel(market.volume)}
             </div>
           </div>
@@ -374,7 +400,9 @@ export default async function MarketPage({
 
           {!tradable && (
             <div className="notice">
-              {market.status === 'closed'
+              {myRestriction
+                ? 'You are connected to this outcome and cannot trade this market.'
+                : market.status === 'closed'
                 ? 'Trading is closed. The admin still has to call it.'
                 : market.status === 'resolving'
                   ? 'Trading is closed while the group reviews the proposed result.'

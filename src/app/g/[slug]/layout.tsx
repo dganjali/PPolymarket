@@ -18,14 +18,14 @@ export default async function GroupLayout({
   const user = await currentUser();
   if (!user) redirect(`/login?next=${encodeURIComponent(`/g/${slug}`)}`);
 
-  const group = groupBySlug(slug);
+  const group = await groupBySlug(slug);
   if (!group) notFound();
 
-  const ms = membership(user.id, group.id);
+  const ms = await membership(user.id, group.id);
   if (!ms) redirect('/join');
 
-  sweepClosures(group.id);
-  sweepResolutions(group.id);
+  await sweepClosures(group.id);
+  await sweepResolutions(group.id);
 
   const base = `/g/${slug}`;
   const isAdmin = ms.role === 'admin';
@@ -48,12 +48,15 @@ export default async function GroupLayout({
     { href: '/', label: 'You' },
   ];
 
-  const rows = standings(group.id, group.starting_balance);
+  const rows = await standings(group.id, group.starting_balance);
   const mine = rows.find((r) => r.userId === user.id);
   const total = mine?.total ?? ms.balance;
   const pnl = total - group.starting_balance;
-  const groups = myGroups(user.id);
-  const unread = unreadNotificationCount(user.id);
+  const [groups, unread, members] = await Promise.all([
+    myGroups(user.id),
+    unreadNotificationCount(user.id),
+    memberCount(group.id),
+  ]);
 
   return (
     <div className="shell">
@@ -136,7 +139,7 @@ export default async function GroupLayout({
                 {group.name}
               </div>
               <div className="mono" style={{ fontSize: 10, color: 'var(--ink-5)', marginTop: 2 }}>
-                {memberCount(group.id)} members
+                {members} members
               </div>
             </div>
           </Link>

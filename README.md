@@ -34,8 +34,11 @@ running when you reseed, restart it — it holds an open handle to the file.
 | `npm test` | market-maker property checks + engine integration tests |
 | `npm run typecheck` | `tsc --noEmit` |
 
-Set `DATABASE_PATH` to move the SQLite file (default `data/minimarket.db`), and
-`SESSION_SECRET` to something real before putting this anywhere shared.
+Set `DATABASE_PATH` to move the local SQLite file (default
+`data/minimarket.db`). Production uses Postgres whenever `POSTGRES_URL` or
+`DATABASE_URL` is set; Supabase's transaction-pooler connection string is the
+recommended Vercel configuration. Set `SESSION_SECRET` to something real before
+putting this anywhere shared.
 
 New accounts sign in with an email/password or handle/password. Google sign-in
 appears automatically when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are
@@ -87,7 +90,8 @@ is per-market solvency.
 - **Groups** — rotating invite codes, per-group bankrolls, owner-managed admin
   roles, season archives, prize and punishment as free text. One account can be
   in many groups; balances and markets are scoped per group.
-- **Markets** — binary Yes/No, categories, resolution rules, close dates.
+- **Markets** — binary Yes/No or 2–8 mutually exclusive outcomes for elections,
+  awards, and tournaments, plus categories, resolution rules, and close dates.
   Members propose, the admin approves (or the group turns approval off).
   Markets close automatically at their deadline. Admins propose a result with
   evidence, members can dispute it during a configurable review window, and
@@ -98,31 +102,49 @@ is per-market solvency.
 - **Portfolio** — open legs with cost basis and mark-to-market, settled history
   with realized P&L, standings across the group.
 - **Admin** — approval queue, resolution review, rotating invite links, stakes
-  editor, liquidity and privacy settings, member roles, and season rollover.
+  editor, liquidity and privacy settings, join requests, member roles, and
+  season rollover.
 - **Notifications** — approvals, disputes, results, role changes and new
   seasons appear in a personal inbox.
 
 Mobile-first, with the desktop trading view from the design at ≥1024px.
+
+## Keeping credits meaningful
+
+Credits are scarce per community and season. With member approval enabled, an
+invite creates a join request and the starting bankroll is issued only after an
+admin approves the person. A `(member, community, season)` grant ledger prevents
+leaving and rejoining from minting a second bankroll. New seasons archive the old
+standings and issue one fresh bankroll to each current member.
+
+This cannot prove that two different emails belong to one person. For larger
+school communities, keep join approval enabled and use Google sign-in with school
+accounts. Domain restrictions and verified-email enforcement are a natural next
+deployment feature.
+
+Multiple-choice markets use a logarithmic market scoring rule (LMSR). Every
+outcome is immediately tradeable, buying one outcome lowers the others, and the
+displayed probabilities always sum to 100%. House liquidity plus the creator's
+stake bounds the market maker's maximum loss.
 
 ## Layout
 
 ```
 src/lib/amm.ts        market maker — pure, shared by server and client
 src/lib/engine.ts     transactional writes: groups, markets, trades, resolution
-src/lib/db.ts         SQLite schema and migrations (node:sqlite, no native deps)
+src/lib/db.ts         SQLite locally, Postgres/Supabase in production
 src/lib/data.ts       read queries
 src/app/actions.ts    server actions
 src/app/g/[slug]/     the group app
 scripts/              seed + tests
 ```
 
-Next.js App Router, TypeScript, and `node:sqlite` from the standard library —
-no ORM, no native modules, no build step beyond Next. Auth is scrypt-hashed
-passwords with an HMAC-signed session cookie.
+Next.js App Router and TypeScript, with a small SQL adapter over `node:sqlite`
+locally and Postgres in production. Auth is scrypt-hashed passwords with an
+HMAC-signed session cookie.
 
 ## Caveats
 
-Single SQLite file with synchronous queries: fine for the small groups this is
-built for, not for thousands of concurrent traders. Prices update on navigation
-rather than streaming — there are no websockets. A disputed result still ends
-with an admin decision; the review trail makes that decision visible to the group.
+Prices update on navigation rather than streaming — there are no websockets. A
+disputed result still ends with an admin decision; the review trail makes that
+decision visible to the group.

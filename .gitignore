@@ -11,3 +11,9 @@ data/*.db-wal
 data/*.db-shm
 next-env.d.ts
 tsconfig.tsbuildinfo
+.vercel
+.env*
+.vercel-cli-*
+.agents/
+skills-lock.json
+%SystemDrive%/
