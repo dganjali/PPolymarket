@@ -1,11 +1,13 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { authenticate, clearSession, createUser, currentUser, setSession } from '@/lib/auth';
 import { groupBySlug } from '@/lib/data';
+import { AppError } from '@/lib/errors';
+import { consumeMagicLink, requestMagicLink, TTL_MINUTES } from '@/lib/magic';
 import {
-  AppError,
   addMember,
   announce,
   approveMarket,
@@ -88,6 +90,44 @@ export async function loginAction(_prev: FormState, fd: FormData): Promise<FormS
 export async function logoutAction() {
   await clearSession();
   redirect('/login');
+}
+
+/** Where this deployment lives, for links that have to survive leaving the browser. */
+async function appOrigin(): Promise<string> {
+  if (process.env.APP_ORIGIN) return process.env.APP_ORIGIN;
+  const h = await headers();
+  const host = h.get('x-forwarded-host') ?? h.get('host');
+  if (!host) throw new AppError('Could not work out this site’s address.');
+  return `${h.get('x-forwarded-proto') ?? 'http'}://${host}`;
+}
+
+export async function requestMagicLinkAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const email = str(fd, 'email');
+  const next = safeNext(str(fd, 'next') || '/groups');
+
+  const res = await guard(async () => requestMagicLink(email, next, await appOrigin()));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  const issued = res as { delivered: boolean; url?: string };
+  if (!issued.delivered && issued.url) {
+    // No RESEND_API_KEY, which is the normal state locally. The link goes to the
+    // server console so development does not need a mail provider.
+    console.log(`\n  Sign-in link for ${email}:\n  ${issued.url}\n`);
+  }
+  return {
+    ok: issued.delivered
+      ? `Check ${email} — the link works once and expires in ${TTL_MINUTES} minutes.`
+      : `Email is not configured here, so the link was printed to the server console (expires in ${TTL_MINUTES} minutes).`,
+  };
+}
+
+export async function magicSignInAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const res = await guard(() => consumeMagicLink(str(fd, 'token')));
+  if ('error' in res) return res as FormState;
+
+  const { user, nextPath } = res as { user: { id: number }; nextPath: string };
+  await setSession(user.id);
+  redirect(nextPath);
 }
 
 // ─── groups ──────────────────────────────────────────────────────────────────

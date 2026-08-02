@@ -17,6 +17,8 @@ process.env.DATABASE_PATH = `data/test-${process.pid}-${Date.now()}.db`;
 const { all, db, get, run } = await import('../src/lib/db');
 const { authenticate, createUser, upsertGoogleUser } = await import('../src/lib/users');
 const { isUniqueViolation } = await import('../src/lib/errors');
+const { consumeMagicLink, inspectMagicLink, MAGIC_LINKS_PER_WINDOW, requestMagicLink } =
+  await import('../src/lib/magic');
 const {
   AppError,
   addMember,
@@ -164,6 +166,64 @@ try {
     (await authenticate('collide', 'password'))?.id === collision.id,
     'linking Google leaves the existing password working',
   );
+
+  // ── magic links ────────────────────────────────────────────────────────────
+  // No RESEND_API_KEY here, so the link comes back instead of being emailed.
+  const tokenOf = (url: string) => new URL(url).searchParams.get('token')!;
+
+  const issued = await requestMagicLink('Newcomer@Example.com ', '/g/test-group', 'https://mini.example');
+  ok(issued.delivered === false && !!issued.url, 'without a mail provider the link is returned for the console');
+  ok(issued.url!.startsWith('https://mini.example/login/magic?token='), 'the link points at the confirm page');
+
+  const stored = (await get<{ token_hash: string; email: string }>(
+    'SELECT token_hash, email FROM login_tokens ORDER BY id DESC LIMIT 1',
+  ))!;
+  ok(stored.email === 'newcomer@example.com', 'the address is normalised before it is stored');
+  ok(!stored.token_hash.includes(tokenOf(issued.url!)), 'the raw token is never written to the database');
+
+  const peek = await inspectMagicLink(tokenOf(issued.url!));
+  ok(peek?.email === 'newcomer@example.com', 'opening the link reveals who it is for');
+  ok(
+    (await get<{ n: number }>('SELECT CAST(COUNT(*) AS INTEGER) AS n FROM login_tokens WHERE consumed_at IS NOT NULL'))!.n === 0,
+    'merely opening the link does not spend it, so mail scanners cannot burn it',
+  );
+
+  const claimed = await consumeMagicLink(tokenOf(issued.url!));
+  ok(claimed.user.email === 'newcomer@example.com', 'a link signs in the address it was sent to');
+  ok(claimed.nextPath === '/g/test-group', 'the link returns you to wherever you started');
+
+  const derived = await requestMagicLink('priya.raman@example.com', '/', 'https://mini.example');
+  const namedUser = (await consumeMagicLink(tokenOf(derived.url!))).user;
+  ok(namedUser.name === 'Priya Raman', 'a display name is derived from the address');
+  ok(namedUser.handle === 'priyaraman', 'a handle is derived from the address');
+  ok(!(await authenticate('newcomer@example.com', '')), 'an email-only account has no usable password');
+  await throws(() => consumeMagicLink(tokenOf(issued.url!)), 'a link cannot be spent twice');
+
+  const returning = await requestMagicLink('newcomer@example.com', '/', 'https://mini.example');
+  const returned = await consumeMagicLink(tokenOf(returning.url!));
+  ok(returned.user.id === claimed.user.id, 'signing in again reuses the account rather than making another');
+
+  // An older email still sitting in the inbox has to stop working.
+  const older = await requestMagicLink('super@example.com', '/', 'https://mini.example');
+  const newer = await requestMagicLink('super@example.com', '/', 'https://mini.example');
+  await consumeMagicLink(tokenOf(newer.url!));
+  await throws(() => consumeMagicLink(tokenOf(older.url!)), 'using a link retires the others for that address');
+
+  const stale = await requestMagicLink('stale@example.com', '/', 'https://mini.example');
+  await run('UPDATE login_tokens SET expires_at = ? WHERE email = ?', at(-1), 'stale@example.com');
+  ok((await inspectMagicLink(tokenOf(stale.url!))) === null, 'an expired link shows as spent');
+  await throws(() => consumeMagicLink(tokenOf(stale.url!)), 'an expired link cannot be spent');
+  await throws(() => consumeMagicLink('not-a-real-token'), 'an invented token is refused');
+  ok((await inspectMagicLink('')) === null, 'an empty token is refused');
+  await throws(() => requestMagicLink('not-an-address', '/', 'https://mini.example'), 'a malformed address is refused');
+
+  // The link must not be usable to bounce somebody to another site.
+  const offsite = await requestMagicLink('offsite@example.com', 'https://evil.example/steal', 'https://mini.example');
+  ok((await consumeMagicLink(tokenOf(offsite.url!))).nextPath === '/groups', 'an off-site redirect is discarded');
+
+  const flood = async () => requestMagicLink('floody@example.com', '/', 'https://mini.example');
+  for (let i = 0; i < MAGIC_LINKS_PER_WINDOW; i++) await flood();
+  await throws(flood, 'one address cannot be used to pump out mail');
 
   const group = await createGroup(admin.id, {
     name: 'Test Group',

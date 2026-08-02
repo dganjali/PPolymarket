@@ -42,10 +42,32 @@ Set `DATABASE_PATH` to move the local SQLite file (default
 recommended Vercel configuration. Set `SESSION_SECRET` to something real before
 putting this anywhere shared.
 
-New accounts sign in with an email/password or handle/password. Google sign-in
-appears automatically when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are
-set; copy `.env.example` and register its localhost callback URL in a Google
-OAuth Web application client.
+## Signing in
+
+Three ways in, all landing on the same account when they share a verified
+address:
+
+- **Password**, with an email or a handle (`priya` and `@priya` both work).
+- **A link by email**, which needs no account first — a new address gets a
+  passwordless one, with a handle and display name derived from it.
+- **Google**, which appears automatically when `GOOGLE_CLIENT_ID` and
+  `GOOGLE_CLIENT_SECRET` are set. Copy `.env.example` and register its localhost
+  callback URL in a Google OAuth Web application client.
+
+Sign-in links go out through [Resend](https://resend.com). Set `RESEND_API_KEY`
+and point `RESEND_FROM` at an address on a domain you have verified there —
+Resend's sandbox sender only delivers to whoever owns the key. **Without a key
+the link is printed to the server console instead**, so local development needs
+no mail provider at all.
+
+Links last 15 minutes, work once, and using one retires every other link
+outstanding for that address. Opening the link only shows a confirm button:
+spending it takes a POST, because mail scanners at schools and workplaces follow
+every link in an inbound message and would otherwise burn the token before the
+person clicked it. Only the SHA-256 of each token is stored, so a database dump
+cannot be replayed into sessions, and the account behind an address is created
+when a link is *used* rather than when one is requested — a typo cannot leave
+junk behind, since nobody can open mail sent to a mailbox they do not have.
 
 ## How the market maker works
 
@@ -156,6 +178,9 @@ src/lib/engine.ts     transactional writes: groups, invites, markets, trades,
                       resolution, seasons
 src/lib/db.ts         SQLite locally, Postgres/Supabase in production
 src/lib/data.ts       read queries
+src/lib/users.ts      accounts, passwords, Google and email identities
+src/lib/magic.ts      single-use sign-in links
+src/lib/mail.ts       Resend transport
 src/app/actions.ts    server actions
 src/app/g/[slug]/     the group app
 src/app/discover/     the public group directory

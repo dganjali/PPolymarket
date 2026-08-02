@@ -3,9 +3,20 @@
 import Link from 'next/link';
 import { useActionState } from 'react';
 import { loginAction, signupAction, type FormState } from '@/app/actions';
+import { MagicLinkForm } from './MagicLink';
 import { SubmitButton } from './ui';
 
 const empty: FormState = {};
+
+function Divider() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--dim-2)' }}>
+      <span className="divider" style={{ flex: 1 }} />
+      <span className="mono" style={{ fontSize: 10 }}>OR</span>
+      <span className="divider" style={{ flex: 1 }} />
+    </div>
+  );
+}
 
 export function AuthForm({
   mode,
@@ -22,6 +33,7 @@ export function AuthForm({
   const [state, formAction] = useActionState(action, empty);
 
   return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
     <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <input type="hidden" name="next" value={next ?? '/groups'} />
 
@@ -79,22 +91,23 @@ export function AuthForm({
       <SubmitButton pendingLabel="…">
         {mode === 'signup' ? 'Create account' : 'Sign in'}
       </SubmitButton>
+    </form>
+
+      <Divider />
+
+      <MagicLinkForm
+        next={next}
+        label={mode === 'signup' ? 'Sign up with an email link' : 'Email me a sign-in link'}
+      />
 
       {googleEnabled && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--dim-2)' }}>
-            <span className="divider" style={{ flex: 1 }} />
-            <span className="mono" style={{ fontSize: 10 }}>OR</span>
-            <span className="divider" style={{ flex: 1 }} />
-          </div>
-          <a
-            className="btn btn-ghost"
-            href={`/api/auth/google?next=${encodeURIComponent(next ?? '/groups')}`}
-            style={{ textAlign: 'center' }}
-          >
-            Continue with Google
-          </a>
-        </>
+        <a
+          className="btn btn-ghost"
+          href={`/api/auth/google?next=${encodeURIComponent(next ?? '/groups')}`}
+          style={{ textAlign: 'center' }}
+        >
+          Continue with Google
+        </a>
       )}
 
       <div style={{ textAlign: 'center', fontSize: 13.5, color: 'var(--ink-5)' }}>
@@ -114,6 +127,6 @@ export function AuthForm({
           </>
         )}
       </div>
-    </form>
+    </div>
   );
 }

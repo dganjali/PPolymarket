@@ -35,6 +35,17 @@ CREATE TABLE IF NOT EXISTS groups (
   created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS login_tokens (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  email       TEXT NOT NULL,
+  token_hash  TEXT NOT NULL UNIQUE,
+  next_path   TEXT NOT NULL DEFAULT '/',
+  expires_at  TEXT NOT NULL,
+  consumed_at TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_login_tokens_email ON login_tokens(email, id DESC);
+
 CREATE TABLE IF NOT EXISTS group_invites (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id    INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,

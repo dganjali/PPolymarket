@@ -9,8 +9,19 @@ export interface User {
   email: string | null;
 }
 
-/** Stored in `pass_hash` for accounts that can only ever sign in with Google. */
+/**
+ * Placed in `pass_hash` for accounts that sign in some other way. Nothing can
+ * verify against them: every real hash is "salt:hash", and these hold no colon.
+ */
 const GOOGLE_ONLY = '!google-only';
+const EMAIL_ONLY = '!email-only';
+
+/** Whether this account can be signed into with a password at all. */
+export function hasPassword(passHash: string): boolean {
+  return passHash.includes(':');
+}
+
+export const validEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 export function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex');
@@ -51,8 +62,20 @@ export function identifierColumn(identifier: string): { column: 'email' | 'handl
     : { column: 'handle', value: normaliseHandle(trimmed) };
 }
 
-function validEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+/**
+ * A presentable display name for somebody who only ever gave us an address:
+ * "priya.raman@school.edu" reads better on a leaderboard as "Priya Raman".
+ */
+function nameFromEmail(email: string): string {
+  return (
+    email
+      .split('@')[0]
+      .split(/[._-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+      .slice(0, 60) || email
+  );
 }
 
 async function availableHandle(preferred: string): Promise<string> {
@@ -63,6 +86,56 @@ async function availableHandle(preferred: string): Promise<string> {
     handle = `${base.slice(0, 20)}_${suffix++}`;
   }
   return handle;
+}
+
+/**
+ * Finds or creates the account for an address whose owner has just proved they
+ * control it — by clicking a sign-in link, or by signing in with Google.
+ *
+ * Two tabs can finish that proof at the same instant and both find nothing, so
+ * rather than lock, the unique indexes settle it: on a collision the retry
+ * finds the row the winner wrote, or picks another free handle.
+ */
+async function provisionVerified(
+  email: string,
+  preferredName: string,
+  sentinel: string,
+  googleSub: string | null,
+): Promise<User> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const existing = googleSub
+      ? await linkGoogleUser(googleSub, email)
+      : await get<User>('SELECT id, handle, name, email FROM users WHERE email = ?', email);
+    if (existing) return existing;
+
+    const handle = await availableHandle(email.split('@')[0]);
+    const name = preferredName.trim() || nameFromEmail(email);
+    try {
+      const res = await run(
+        'INSERT INTO users (handle, name, pass_hash, email, google_sub) VALUES (?, ?, ?, ?, ?)',
+        handle,
+        name,
+        sentinel,
+        email,
+        googleSub,
+      );
+      return { id: Number(res.lastInsertRowid), handle, name, email };
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+    }
+  }
+  throw new AppError('Could not finish setting up your account. Try again.');
+}
+
+/**
+ * The account behind an address the holder has just proved they control, via a
+ * sign-in link. New addresses get a passwordless account — a typo cannot create
+ * one, because nobody can open a link sent to a mailbox they do not have.
+ */
+export async function userForVerifiedEmail(email: string): Promise<User> {
+  const clean = normaliseEmail(email);
+  if (!validEmail(clean)) throw new AppError('Enter a valid email address.');
+  return provisionVerified(clean, '', EMAIL_ONLY, null);
 }
 
 export async function createUser(handle: string, name: string, password: string, email?: string): Promise<User> {
@@ -113,10 +186,10 @@ export async function authenticate(identifier: string, password: string): Promis
 
   // Always pay the hashing cost, even with no account to check against, so the
   // time a failed sign-in takes cannot be used to enumerate handles or
-  // addresses. Google-only accounts hash against the decoy for the same reason.
-  const googleOnly = row?.pass_hash === GOOGLE_ONLY;
-  const matches = verifyPassword(password, row && !googleOnly ? row.pass_hash : DECOY_HASH);
-  if (!row || googleOnly || !matches) return null;
+  // addresses. Passwordless accounts hash against the decoy for the same reason.
+  const passwordless = !row || !hasPassword(row.pass_hash);
+  const matches = verifyPassword(password, passwordless ? DECOY_HASH : row!.pass_hash);
+  if (!row || passwordless || !matches) return null;
 
   return { id: row.id, handle: row.handle, name: row.name, email: row.email };
 }
@@ -150,30 +223,7 @@ export async function upsertGoogleUser(input: {
     throw new AppError('Google did not return a verified email address.');
   }
 
-  // Two tabs finishing the OAuth dance at once both find no account and both
-  // insert. Rather than lock, let the unique indexes settle it and look again:
-  // the retry finds the row the winner wrote, or a free handle.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const existing = await linkGoogleUser(input.sub, email);
-    if (existing) return existing;
-
-    const handle = await availableHandle(email.split('@')[0]);
-    const name = input.name.trim() || handle;
-    try {
-      const res = await run(
-        `INSERT INTO users (handle, name, pass_hash, email, google_sub) VALUES (?, ?, ?, ?, ?)`,
-        handle,
-        name,
-        GOOGLE_ONLY,
-        email,
-        input.sub,
-      );
-      return { id: Number(res.lastInsertRowid), handle, name, email };
-    } catch (error) {
-      if (!isUniqueViolation(error)) throw error;
-    }
-  }
-  throw new AppError('Could not finish signing you in with Google. Try again.');
+  return provisionVerified(email, input.name, GOOGLE_ONLY, input.sub);
 }
 
 export async function userById(id: number): Promise<User | null> {
