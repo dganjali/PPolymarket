@@ -12,7 +12,7 @@ import {
   marketRestrictions,
   marketTraderCount,
   positionFor,
-  priceSeries,
+  priceHistory,
   recentTrades,
   reserves,
 } from '@/lib/data';
@@ -67,9 +67,9 @@ export default async function MarketPage({
 
   const r = reserves(market);
   const p = priceYes(r);
-  const [series, pos, restrictions, myRestriction, yesHolders, noHolders, trades, thread, disputes, myDispute, traderCount] =
+  const [history, pos, restrictions, myRestriction, yesHolders, noHolders, trades, thread, disputes, myDispute, traderCount] =
     await Promise.all([
-      priceSeries(market.id, 60),
+      priceHistory(market.id, 60),
       positionFor(user.id, market.id),
       marketRestrictions(market.id),
       marketRestrictionFor(user.id, market.id),
@@ -81,6 +81,7 @@ export default async function MarketPage({
       market.status === 'resolving' ? disputeFor(user.id, market.id) : Promise.resolve(undefined),
       marketTraderCount(market.id),
     ]);
+  const series = history.map((point) => point.price);
   const first = series.length > 1 ? series[0] : market.open_price;
   const delta = p - first;
 
@@ -152,7 +153,11 @@ export default async function MarketPage({
           </div>
 
           <div className="panel" style={{ padding: '12px 10px 8px' }}>
-            <PriceChart series={series} id={`chart-${market.id}`} />
+            <PriceChart
+              series={series}
+              timestamps={history.map((point) => point.created_at)}
+              id={`chart-${market.id}`}
+            />
           </div>
 
           {market.status === 'resolved' && (

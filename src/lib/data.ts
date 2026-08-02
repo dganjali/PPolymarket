@@ -244,14 +244,25 @@ export function reserves(m: Pick<MarketRow, 'yes_reserve' | 'no_reserve'>): Rese
   return { yes: m.yes_reserve, no: m.no_reserve };
 }
 
-/** Chronological price series for a market, oldest first, normalised 0..1. */
-export async function priceSeries(marketId: number, limit = 40): Promise<number[]> {
-  const rows = await all<{ price: number }>(
-    'SELECT price FROM (SELECT price, id FROM price_points WHERE market_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id',
+export interface PriceHistoryPoint {
+  price: number;
+  created_at: string;
+}
+
+/** Chronological price history for a market, oldest first. */
+export async function priceHistory(marketId: number, limit = 40): Promise<PriceHistoryPoint[]> {
+  return all<PriceHistoryPoint>(
+    `SELECT price, created_at FROM
+       (SELECT price, created_at, id FROM price_points WHERE market_id = ? ORDER BY id DESC LIMIT ?)
+     ORDER BY id`,
     marketId,
     limit,
   );
-  return rows.map((r) => r.price);
+}
+
+/** Chronological price series for compact charts, normalised 0..1. */
+export async function priceSeries(marketId: number, limit = 40): Promise<number[]> {
+  return (await priceHistory(marketId, limit)).map((point) => point.price);
 }
 
 export async function priceSeriesFor(marketIds: number[], limit = 16): Promise<Map<number, number[]>> {

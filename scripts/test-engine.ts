@@ -52,6 +52,7 @@ const {
   marketById,
   marketOptions,
   optionsWithPrices,
+  priceHistory,
   publicGroups,
   seasonArchive,
 } = await import('../src/lib/data');
@@ -336,6 +337,12 @@ try {
   );
 
   await buy(b.id, market.id, 'NO', 150);
+  const chartHistory = await priceHistory(market.id);
+  ok(chartHistory.length >= 3, 'price history keeps the opening price and subsequent fills');
+  ok(
+    chartHistory.every((point) => point.price >= 0 && point.price <= 1 && !Number.isNaN(Date.parse(`${point.created_at.replace(' ', 'T')}Z`))),
+    'every chart point has a probability and timestamp',
+  );
 
   // Partial sell keeps the average price intact.
   const pos = (await get<{ yes_shares: number; yes_cost: number }>(
