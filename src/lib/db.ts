@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import postgres, { type Sql } from 'postgres';
+import { AppError } from './errors';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -352,10 +353,28 @@ function open(): DatabaseSync {
 const postgresUrl = process.env.POSTGRES_URL ?? process.env.DATABASE_URL;
 const usingPostgres = !!postgresUrl;
 
+/**
+ * Set when this environment has no usable database.
+ *
+ * A deployed instance has a read-only filesystem, so quietly falling back to a
+ * local SQLite file throws EROFS while this module is still being evaluated —
+ * which takes down every route with a digest and no message. Naming the problem
+ * instead means the health check and the logs can say what to fix.
+ */
+export const databaseConfigError: string | null =
+  !usingPostgres && process.env.NODE_ENV === 'production'
+    ? 'No POSTGRES_URL or DATABASE_URL is set. A deployed Minimarket needs Postgres — ' +
+      'the local SQLite fallback cannot be written on a serverless filesystem.'
+    : null;
+
+if (databaseConfigError) console.error(`\n[db] ${databaseConfigError}\n`);
+
 // Cached on globalThis so Next's dev-server module reloads reuse one handle.
 // Scripts and local development continue to use SQLite; Vercel uses Supabase Postgres.
 export const db: DatabaseSync = (
-  usingPostgres ? undefined : globalThis.__minimarketDb ?? (globalThis.__minimarketDb = open())
+  usingPostgres || databaseConfigError
+    ? undefined
+    : globalThis.__minimarketDb ?? (globalThis.__minimarketDb = open())
 ) as DatabaseSync;
 
 const pg = usingPostgres
@@ -455,12 +474,19 @@ async function pgQuery<T = Row>(sql: string, params: unknown[], mode: 'read' | '
   return await client.unsafe(postgresSql(sql, mode), params as never[]) as unknown as T[] & { count: number };
 }
 
+/** Every entry point checks this, so a misconfigured deployment says so once, clearly. */
+function requireDatabase() {
+  if (databaseConfigError) throw new AppError(databaseConfigError);
+}
+
 export async function all<T = Row>(sql: string, ...params: unknown[]): Promise<T[]> {
+  requireDatabase();
   if (pg) return Array.from(await pgQuery<T>(sql, params, 'read'), plain);
   return (db.prepare(sql).all(...(params as never[])) as T[]).map(plain);
 }
 
 export async function get<T = Row>(sql: string, ...params: unknown[]): Promise<T | undefined> {
+  requireDatabase();
   if (pg) {
     const rows = await pgQuery<T>(sql, params, 'read');
     return rows.length ? plain(rows[0]) : undefined;
@@ -470,6 +496,7 @@ export async function get<T = Row>(sql: string, ...params: unknown[]): Promise<T
 }
 
 export async function run(sql: string, ...params: unknown[]): Promise<{ lastInsertRowid: number; changes: number }> {
+  requireDatabase();
   if (pg) {
     const rows = await pgQuery<{ id?: number }>(sql, params, 'run');
     return { lastInsertRowid: Number(rows[0]?.id ?? 0), changes: rows.count };
@@ -480,6 +507,7 @@ export async function run(sql: string, ...params: unknown[]): Promise<{ lastInse
 
 /** Runs `fn` inside a transaction, rolling back on throw. */
 export async function tx<T>(fn: () => Promise<T>): Promise<T> {
+  requireDatabase();
   if (pg) {
     await ensurePostgres();
     return await pg.begin((transaction) => pgTransaction.run(transaction as unknown as Queryable, fn)) as unknown as T;
