@@ -1,6 +1,7 @@
 import { all, get } from './db';
 import { priceYes, type Reserves, type Side } from './amm';
 import { categoricalPrices, type CategoricalState } from './categorical';
+import { parseStamp } from './format';
 
 export interface GroupRow {
   id: number;
@@ -19,6 +20,8 @@ export interface GroupRow {
   dispute_window_hours: number;
   current_season: number;
   season_started_at: string;
+  visibility: 'public' | 'private';
+  description: string;
 }
 
 export interface MarketRow {
@@ -84,6 +87,102 @@ export async function groupByCode(code: string): Promise<GroupRow | undefined> {
   return get<GroupRow>('SELECT * FROM groups WHERE invite_code = ?', code.trim().toUpperCase());
 }
 
+export interface InviteRow {
+  id: number;
+  group_id: number;
+  code: string;
+  label: string;
+  created_by: number | null;
+  expires_at: string | null;
+  max_uses: number | null;
+  uses: number;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export type InviteState = 'active' | 'revoked' | 'expired' | 'used up';
+
+/** Why a link no longer works, or 'active' if it still does. */
+export function inviteState(
+  invite: Pick<InviteRow, 'expires_at' | 'max_uses' | 'uses' | 'revoked_at'>,
+  now = Date.now(),
+): InviteState {
+  if (invite.revoked_at) return 'revoked';
+  if (invite.expires_at && parseStamp(invite.expires_at) <= now) return 'expired';
+  if (invite.max_uses !== null && invite.uses >= invite.max_uses) return 'used up';
+  return 'active';
+}
+
+export async function inviteByCode(code: string): Promise<InviteRow | undefined> {
+  return get<InviteRow>('SELECT * FROM group_invites WHERE code = ?', code.trim().toUpperCase());
+}
+
+export async function groupInvites(groupId: number): Promise<(InviteRow & { created_by_name: string | null })[]> {
+  return all<InviteRow & { created_by_name: string | null }>(
+    `SELECT i.*, u.name AS created_by_name FROM group_invites i
+       LEFT JOIN users u ON u.id = i.created_by
+      WHERE i.group_id = ? ORDER BY i.id DESC`,
+    groupId,
+  );
+}
+
+/** The group behind an invite code, whether it is a link or the group's own code. */
+export async function groupByAnyCode(
+  code: string,
+): Promise<{ group: GroupRow; invite?: InviteRow } | undefined> {
+  const invite = await inviteByCode(code);
+  if (invite) {
+    const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', invite.group_id);
+    return group && { group, invite };
+  }
+  const group = await groupByCode(code);
+  return group && { group };
+}
+
+export interface PublicGroupRow extends GroupRow {
+  members: number;
+  live_markets: number;
+  joined: number;
+  requested: number;
+}
+
+/** The public directory — every open community, most active first. */
+export async function publicGroups(userId: number, limit = 60): Promise<PublicGroupRow[]> {
+  return all<PublicGroupRow>(
+    `SELECT g.*,
+            (SELECT CAST(COUNT(*) AS INTEGER) FROM memberships x WHERE x.group_id = g.id) AS members,
+            (SELECT CAST(COUNT(*) AS INTEGER) FROM markets m
+              WHERE m.group_id = g.id AND m.status = 'open' AND m.season_number = g.current_season) AS live_markets,
+            (SELECT CAST(COUNT(*) AS INTEGER) FROM memberships x WHERE x.group_id = g.id AND x.user_id = ?) AS joined,
+            (SELECT CAST(COUNT(*) AS INTEGER) FROM membership_requests r WHERE r.group_id = g.id AND r.user_id = ?) AS requested
+       FROM groups g
+      WHERE g.visibility = 'public'
+      ORDER BY live_markets DESC, members DESC, g.id DESC
+      LIMIT ?`,
+    userId,
+    userId,
+    limit,
+  );
+}
+
+export async function userByIdentifier(identifier: string) {
+  const value = identifier.trim();
+  if (!value) return undefined;
+  return get<{ id: number; name: string; handle: string; email: string | null }>(
+    'SELECT id, name, handle, email FROM users WHERE handle = ? OR email = ?',
+    value.replace(/^@/, '').toLowerCase(),
+    value.toLowerCase(),
+  );
+}
+
+export async function membershipRequestFor(userId: number, groupId: number) {
+  return get<{ id: number; requested_at: string }>(
+    'SELECT id, requested_at FROM membership_requests WHERE user_id = ? AND group_id = ?',
+    userId,
+    groupId,
+  );
+}
+
 export async function membership(userId: number, groupId: number): Promise<MembershipRow | undefined> {
   return get<MembershipRow>(
     'SELECT * FROM memberships WHERE user_id = ? AND group_id = ?',
@@ -93,13 +192,13 @@ export async function membership(userId: number, groupId: number): Promise<Membe
 }
 
 export async function memberCount(groupId: number): Promise<number> {
-  return (await get<{ n: number }>('SELECT COUNT(*) AS n FROM memberships WHERE group_id = ?', groupId))!.n;
+  return (await get<{ n: number }>('SELECT CAST(COUNT(*) AS INTEGER) AS n FROM memberships WHERE group_id = ?', groupId))!.n;
 }
 
 export async function myGroups(userId: number) {
   return all<GroupRow & { role: string; balance: number; members: number }>(
     `SELECT g.*, ms.role, ms.balance,
-            (SELECT COUNT(*) FROM memberships x WHERE x.group_id = g.id) AS members
+            (SELECT CAST(COUNT(*) AS INTEGER) FROM memberships x WHERE x.group_id = g.id) AS members
        FROM memberships ms JOIN groups g ON g.id = ms.group_id
       WHERE ms.user_id = ?
       ORDER BY ms.joined_at`,
@@ -275,7 +374,7 @@ export async function standings(groupId: number, startingBalance: number): Promi
 
   const tradeCounts = new Map<number, number>();
   for (const t of await all<{ user_id: number; n: number }>(
-    `SELECT t.user_id, COUNT(*) AS n FROM trades t JOIN markets m ON m.id = t.market_id
+    `SELECT t.user_id, CAST(COUNT(*) AS INTEGER) AS n FROM trades t JOIN markets m ON m.id = t.market_id
        JOIN groups g ON g.id = m.group_id
       WHERE m.group_id = ? AND m.season_number = g.current_season GROUP BY t.user_id`,
     groupId,
@@ -368,7 +467,7 @@ export async function holders(marketId: number, side: Side, limit = 5): Promise<
 
 export async function marketTraderCount(marketId: number): Promise<number> {
   return (await get<{ n: number }>(
-    'SELECT COUNT(DISTINCT user_id) AS n FROM trades WHERE market_id = ?',
+    'SELECT CAST(COUNT(DISTINCT user_id) AS INTEGER) AS n FROM trades WHERE market_id = ?',
     marketId,
   ))!.n;
 }
@@ -530,7 +629,7 @@ export async function notifications(userId: number, limit = 60): Promise<Notific
 
 export async function unreadNotificationCount(userId: number): Promise<number> {
   return (await get<{ n: number }>(
-    'SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL',
+    'SELECT CAST(COUNT(*) AS INTEGER) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL',
     userId,
   ))!.n;
 }
@@ -552,6 +651,45 @@ export async function seasonHistory(groupId: number): Promise<SeasonResultRow[]>
       WHERE r.group_id = ? ORDER BY r.season_number DESC, r.rank`,
     groupId,
   );
+}
+
+export interface SeasonRow {
+  id: number;
+  group_id: number;
+  season_number: number;
+  started_at: string;
+  ended_at: string;
+  prize: string;
+  punishment: string;
+  champion_id: number | null;
+  runner_up_id: number | null;
+  last_place_id: number | null;
+  note: string;
+  entrants: number;
+  champion_name: string | null;
+  champion_handle: string | null;
+  runner_up_name: string | null;
+  last_place_name: string | null;
+  last_place_handle: string | null;
+}
+
+/** Closed seasons, newest first — the header row behind each archived standings table. */
+export async function seasonArchive(groupId: number): Promise<SeasonRow[]> {
+  return all<SeasonRow>(
+    `SELECT s.*, champ.name AS champion_name, champ.handle AS champion_handle,
+            runner.name AS runner_up_name,
+            last.name AS last_place_name, last.handle AS last_place_handle
+       FROM seasons s
+       LEFT JOIN users champ ON champ.id = s.champion_id
+       LEFT JOIN users runner ON runner.id = s.runner_up_id
+       LEFT JOIN users last ON last.id = s.last_place_id
+      WHERE s.group_id = ? ORDER BY s.season_number DESC`,
+    groupId,
+  );
+}
+
+export async function latestSeason(groupId: number): Promise<SeasonRow | undefined> {
+  return (await seasonArchive(groupId))[0];
 }
 
 export const CATEGORIES = ['Drama', 'School', 'Traditions', 'Sports', 'Life', 'Other'];

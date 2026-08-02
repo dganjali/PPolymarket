@@ -34,6 +34,7 @@ export default async function GroupLayout({
     { href: base, label: 'Markets', exact: true },
     { href: `${base}/portfolio`, label: 'Portfolio' },
     { href: `${base}/leaderboard`, label: 'Leaderboard' },
+    { href: `${base}/seasons`, label: 'Seasons' },
     { href: `${base}/activity`, label: 'Activity' },
     ...(isAdmin ? [{ href: `${base}/admin`, label: 'Admin' }] : []),
   ];

@@ -12,7 +12,12 @@ const KIND_COLOR: Record<string, string> = {
   close: 'var(--dim)',
   join: 'var(--ink-4)',
   group: 'var(--ink-4)',
+  resolution: 'var(--ink-4)',
+  dispute: 'var(--no-hi)',
 };
+
+/** Kinds whose body is a whole sentence rather than a predicate about the actor. */
+const NOTICE = new Set(['season', 'announcement']);
 
 export default async function ActivityPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -30,6 +35,26 @@ export default async function ActivityPage({ params }: { params: Promise<{ slug:
 
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {feed.map((e) => {
+          if (NOTICE.has(e.kind)) {
+            return (
+              <div
+                key={e.id}
+                style={{
+                  margin: '9px 0',
+                  padding: '11px 13px',
+                  borderRadius: 12,
+                  background: e.kind === 'season' ? 'var(--gold-bg)' : 'var(--card)',
+                  border: `1px solid ${e.kind === 'season' ? 'var(--gold-line)' : 'var(--line-2)'}`,
+                }}
+              >
+                <div style={{ fontSize: 13, lineHeight: 1.5 }}>{e.body}</div>
+                <div className="mono" style={{ fontSize: 9.5, color: 'var(--dim-2)', marginTop: 6 }}>
+                  {e.kind === 'season' ? 'SEASON' : 'ANNOUNCEMENT'}
+                  {e.user_name ? ` · ${e.user_name}` : ''} · {relative(e.created_at)}
+                </div>
+              </div>
+            );
+          }
           const row = (
             <div
               style={{

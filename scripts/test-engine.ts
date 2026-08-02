@@ -18,27 +18,42 @@ const { all, db, get, run } = await import('../src/lib/db');
 const { authenticate, createUser, upsertGoogleUser } = await import('../src/lib/users');
 const {
   AppError,
+  addMember,
+  announce,
   approveMarket,
   buy,
   buyCategorical,
   createGroup,
+  createInvite,
   createMarket,
   disputeResolution,
   finalizeResolution,
   joinGroup,
+  joinPublicGroup,
+  leaveGroup,
   proposeResolution,
   removeMember,
   regenerateInviteCode,
   rejectMarket,
   reviewMembershipRequest,
   resolveMarket,
+  revokeInvite,
   sell,
   sellCategorical,
   setMemberRole,
   startNextSeason,
   sweepResolutions,
+  transferOwnership,
+  updateGroup,
 } = await import('../src/lib/engine');
-const { marketById, marketOptions, optionsWithPrices } = await import('../src/lib/data');
+const {
+  latestSeason,
+  marketById,
+  marketOptions,
+  optionsWithPrices,
+  publicGroups,
+  seasonArchive,
+} = await import('../src/lib/data');
 
 let checks = 0;
 const ok = (cond: boolean, label: string) => {
@@ -110,6 +125,62 @@ try {
   await joinGroup(guardedMember.id, guarded.invite_code);
   await reviewMembershipRequest(admin.id, guarded.id, guardedMember.id, 'approve');
   close(await balance(guardedMember.id, guarded.id), 0, 'rejoining cannot mint a second seasonal bankroll');
+
+  // ── invite links, directory, and roster management ─────────────────────────
+  const linkGroup = await createGroup(admin.id, {
+    name: 'Link Group',
+    startingBalance: 1000,
+    seasonEnds: null,
+    prize: 'the good parking spot',
+    punishment: 'the mascot suit',
+    requireMemberApproval: false,
+  });
+  const invitee = await createUser('invitee', 'Invitee', 'password', 'invitee@example.com');
+  const spare = await createUser('spare', 'Spare', 'password', 'spare@example.com');
+  const browser = await createUser('browser', 'Browser', 'password', 'browser@example.com');
+
+  const capped = await createInvite(admin.id, linkGroup.id, { label: 'Homeroom', maxUses: 1 });
+  ok(capped.code.length >= 4, 'admins can mint a custom invite link');
+  await joinGroup(invitee.id, capped.code);
+  ok(!!(await get('SELECT id FROM memberships WHERE user_id = ? AND group_id = ?', invitee.id, linkGroup.id)), 'an invite link admits its holder');
+  await throws(() => joinGroup(spare.id, capped.code), 'a link stops working once its uses run out');
+
+  const named = await createInvite(admin.id, linkGroup.id, { code: 'ridgeview-26' });
+  ok(named.code === 'RIDGEVIEW-26', 'custom codes are normalised to upper case');
+  await throws(() => createInvite(admin.id, linkGroup.id, { code: 'ridgeview-26' }), 'custom codes must be unique');
+  await throws(() => createInvite(admin.id, linkGroup.id, { code: 'no' }), 'custom codes have a minimum length');
+
+  const expiring = await createInvite(admin.id, linkGroup.id, { expiresInHours: 1 });
+  await run('UPDATE group_invites SET expires_at = ? WHERE id = ?', at(-1), expiring.id);
+  await throws(() => joinGroup(spare.id, expiring.code), 'an expired link stops working');
+
+  const revoked = await createInvite(admin.id, linkGroup.id, {});
+  await revokeInvite(admin.id, linkGroup.id, revoked.id);
+  await throws(() => joinGroup(spare.id, revoked.code), 'a revoked link stops working');
+  await throws(() => createInvite(spare.id, linkGroup.id, {}), 'only admins can mint invite links');
+
+  await addMember(admin.id, linkGroup.id, '@spare');
+  close(await balance(spare.id, linkGroup.id), 1000, 'an admin can add an existing account directly');
+  await throws(() => addMember(admin.id, linkGroup.id, 'spare@example.com'), 'adding somebody twice is refused');
+  await throws(() => addMember(admin.id, linkGroup.id, 'ghost@example.com'), 'unknown accounts cannot be added');
+
+  await updateGroup(admin.id, linkGroup.id, { visibility: 'public', description: 'Open to the school.' });
+  const directory = await publicGroups(browser.id);
+  ok(directory.some((row) => row.id === linkGroup.id), 'public groups show up in the directory');
+  ok(!directory.some((row) => row.id === guarded.id), 'invite-only groups stay out of the directory');
+  await joinPublicGroup(browser.id, linkGroup.id);
+  close(await balance(browser.id, linkGroup.id), 1000, 'anyone can join a public group without a code');
+  await throws(() => joinPublicGroup(browser.id, guarded.id), 'private groups refuse a codeless join');
+
+  await leaveGroup(spare.id, linkGroup.id);
+  ok(!(await get('SELECT id FROM memberships WHERE user_id = ? AND group_id = ?', spare.id, linkGroup.id)), 'members can leave a group');
+  await throws(() => leaveGroup(admin.id, linkGroup.id), 'the owner has to hand the group over before leaving');
+  await transferOwnership(admin.id, linkGroup.id, invitee.id);
+  ok((await get<{ owner_id: number }>('SELECT owner_id FROM groups WHERE id = ?', linkGroup.id))!.owner_id === invitee.id, 'ownership can be handed over');
+  ok((await get<{ role: string }>('SELECT role FROM memberships WHERE user_id = ? AND group_id = ?', invitee.id, linkGroup.id))!.role === 'admin', 'the new owner is an admin');
+  await announce(invitee.id, linkGroup.id, 'Season stakes are locked in.');
+  ok((await get<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE group_id = ? AND kind = 'announcement'", linkGroup.id))!.n === 1, 'admins can post an announcement');
+  await throws(() => announce(spare.id, linkGroup.id, 'Let me in'), 'non-members cannot announce');
 
   // ── membership and permissions ─────────────────────────────────────────────
   const outsider = await createUser('nope', 'Outsider', 'password');
@@ -292,12 +363,36 @@ try {
   await sweepResolutions(group.id);
   ok((await marketById(approved.id))!.status === 'resolved', 'undisputed results finalize after review');
 
-  await startNextSeason(admin.id, group.id, null);
-  const freshGroup = (await get<{ current_season: number }>('SELECT current_season FROM groups WHERE id = ?', group.id))!;
+  const closed = await startNextSeason(admin.id, group.id, {
+    note: 'See you all next season.',
+    nextPrize: 'first pick of senior quotes',
+  });
+  const freshGroup = (await get<{ current_season: number; prize: string; punishment: string }>(
+    'SELECT current_season, prize, punishment FROM groups WHERE id = ?',
+    group.id,
+  ))!;
   ok(freshGroup.current_season === 2, 'owners can archive a completed season');
   close(await balance(a.id, group.id), 1000, 'a new season resets member balances');
   ok((await get<{ n: number }>('SELECT COUNT(*) AS n FROM season_results WHERE group_id = ?', group.id))!.n === 3, 'season standings are archived');
   ok((await get<{ n: number }>('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ?', a.id))!.n > 0, 'important community events create notifications');
+
+  const archived = (await latestSeason(group.id))!;
+  ok(archived.season_number === 1, 'closing a season writes its archive row');
+  ok(archived.champion_id === closed.champion?.userId, 'the archive records the champion');
+  ok(archived.last_place_id === closed.lastPlace?.userId, 'the archive records the last-place finisher');
+  ok(archived.prize === 'bragging rights' && archived.punishment === 'dishes', 'the archive snapshots the stakes that were on the table');
+  ok(archived.entrants === 3, 'the archive records how many played');
+  ok(archived.note === 'See you all next season.', 'the closing note is kept with the season');
+  ok(freshGroup.prize === 'first pick of senior quotes', 'a new season can open with fresh stakes');
+  ok(freshGroup.punishment === 'dishes', 'stakes left blank carry over');
+  ok(
+    (await get<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND kind = 'season'",
+      closed.champion!.userId === admin.id ? closed.lastPlace!.userId : closed.champion!.userId,
+    ))!.n > 0,
+    'the season result is announced to the group',
+  );
+  ok((await seasonArchive(group.id)).length === 1, 'the season archive lists closed seasons');
 
   console.log(`✓ ${checks} assertions passed`);
 } finally {

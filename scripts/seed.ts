@@ -8,13 +8,17 @@
 import { db, run } from '../src/lib/db';
 import { createUser } from '../src/lib/users';
 import {
+  announce,
   buy,
   createGroup,
+  createInvite,
   createMarket,
   joinGroup,
   postComment,
   resolveMarket,
   sell,
+  startNextSeason,
+  updateGroup,
 } from '../src/lib/engine';
 import { marketById, groupBySlug } from '../src/lib/data';
 import { priceYes } from '../src/lib/amm';
@@ -201,6 +205,9 @@ async function main() {
     prize:
       'Winner gets the good parking spot for all of senior spring + a $40 Chipotle card from the class fund.',
     punishment: 'Last place has to do the morning announcements in a full mascot suit.',
+    // The demo group hands out its bankrolls on the spot; the second group below
+    // is the one that shows the approval queue.
+    requireMemberApproval: false,
   });
 
   for (const [handle] of PEOPLE) {
@@ -265,14 +272,68 @@ async function main() {
     await postComment(id('dawson'), drama.id, 'This market is defamation and I am leaving it open.');
   }
 
+  // Named invite links: one open-ended, one that runs out, one already dead.
+  await createInvite(id('dawson'), group.id, { code: 'ridgeview-26', label: 'Class group chat' });
+  await createInvite(id('dawson'), group.id, {
+    label: 'Homeroom 4B',
+    maxUses: 5,
+    expiresInHours: 72,
+  });
+  const lapsed = await createInvite(id('dawson'), group.id, { label: 'Spirit week table' });
+  await run('UPDATE group_invites SET expires_at = ?, uses = 3 WHERE id = ?', at(-2), lapsed.id);
+
+  await announce(
+    id('dawson'),
+    group.id,
+    'Prizes get handed out at the last assembly. Settle your positions before finals week.',
+  );
+
+  // A second community: public, screened, and one season already in the books —
+  // so the directory, the join queue, and the season archive all have something.
+  const league = await createGroup(id('priya'), {
+    name: 'Ridgeview Debate League',
+    startingBalance: 1500,
+    marketLiquidity: 400,
+    seasonEnds: new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10),
+    prize: 'Winner picks the topic for the season opener.',
+    punishment: 'Last place judges novice rounds all weekend.',
+    visibility: 'public',
+    description: 'Open to anyone at Ridgeview. We trade tournaments, bids, and bid drama.',
+    requireMemberApproval: false,
+  });
+  const leagueMembers = ['marcus', 'elena', 'tess', 'nadia'];
+  for (const handle of leagueMembers) await joinGroup(id(handle), league.invite_code);
+
+  const bid = await createMarket(id('priya'), league, {
+    question: 'Does Ridgeview take a bid at the Berkeley invitational?',
+    category: 'Sports',
+    rules: 'Resolves YES on any qualifying bid earned at the tournament.',
+    closesAt: at(-2),
+    openPrice: 0.4,
+    funding: 40,
+  });
+  await simulate(bid.id, [id('priya'), ...leagueMembers.map(id)], 0.72, 22);
+  await resolveMarket(id('priya'), bid.id, 'YES');
+  await startNextSeason(id('priya'), league.id, {
+    note: 'Trophy is in the debate room. Season two topics go up Monday.',
+    seasonEnds: new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10),
+  });
+  // Screening is on from season two, so newcomers land in the approval queue.
+  await updateGroup(id('priya'), league.id, { require_member_approval: 1 });
+  await joinGroup(id('owen'), league.invite_code);
+
   const fresh = (await groupBySlug(group.slug))!;
+  const freshLeague = (await groupBySlug(league.slug))!;
   const counts = db.prepare('SELECT COUNT(*) AS n FROM trades').get() as { n: number };
 
   console.log(`\n  Seeded “${fresh.name}”`);
   console.log(`  ${PEOPLE.length} members · ${counts.n} trades`);
   console.log(`\n  URL          http://localhost:3000/g/${fresh.slug}`);
   console.log(`  Invite code  ${fresh.invite_code}`);
-  console.log(`  Sign in as   dawson (admin) / priya / marcus / elena / kai / loic / tess …`);
+  console.log(`  Invite link  http://localhost:3000/join?code=RIDGEVIEW-26`);
+  console.log(`\n  Public group http://localhost:3000/g/${freshLeague.slug} (season 1 archived, run by priya)`);
+  console.log(`  Directory    http://localhost:3000/discover`);
+  console.log(`\n  Sign in as   dawson (admin) / priya / marcus / elena / kai / loic / tess …`);
   console.log(`  Password     ${PASSWORD}\n`);
 }
 

@@ -6,14 +6,19 @@ import { authenticate, clearSession, createUser, currentUser, setSession } from 
 import { groupBySlug } from '@/lib/data';
 import {
   AppError,
+  addMember,
+  announce,
   approveMarket,
   buy,
   buyCategorical,
   createGroup,
+  createInvite,
   createMarket,
   disputeResolution,
   finalizeResolution,
   joinGroup,
+  joinPublicGroup,
+  leaveGroup,
   markNotificationsRead,
   postComment,
   proposeResolution,
@@ -22,10 +27,12 @@ import {
   removeMember,
   reopenMarket,
   reviewMembershipRequest,
+  revokeInvite,
   sell,
   sellCategorical,
   setMemberRole,
   startNextSeason,
+  transferOwnership,
   updateGroup,
 } from '@/lib/engine';
 import type { Side } from '@/lib/amm';
@@ -101,10 +108,32 @@ export async function createGroupAction(_prev: FormState, fd: FormData): Promise
       seasonEnds: str(fd, 'seasonEnds') || null,
       prize: str(fd, 'prize'),
       punishment: str(fd, 'punishment'),
+      visibility: str(fd, 'visibility') === 'public' ? 'public' : 'private',
+      description: str(fd, 'description'),
     }),
   );
   if ('error' in res) return res as FormState;
   redirect(`/g/${(res as { slug: string }).slug}`);
+}
+
+export async function joinPublicGroupAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const res = await guard(() => joinPublicGroup(user.id, num(fd, 'groupId')));
+  if ('error' in res) return res as FormState;
+  if ((res as { join_status: string }).join_status === 'pending') {
+    revalidatePath('/discover');
+    return { ok: 'Request sent. An admin has to approve you before a bankroll is issued.' };
+  }
+  redirect(`/g/${(res as { slug: string }).slug}`);
+}
+
+export async function leaveGroupAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const group = await groupBySlug(str(fd, 'slug'));
+  if (!group) return { error: 'Group not found.' };
+  const res = await guard(() => leaveGroup(user.id, group.id));
+  if ('error' in res) return res as FormState;
+  redirect('/groups');
 }
 
 export async function joinGroupAction(_prev: FormState, fd: FormData): Promise<FormState> {
@@ -139,6 +168,9 @@ export async function updateSettingsAction(_prev: FormState, fd: FormData): Prom
 
   const res = await guard(() =>
     updateGroup(user.id, group.id, {
+      name: str(fd, 'name') || group.name,
+      description: str(fd, 'description').slice(0, 280),
+      visibility: str(fd, 'visibility') === 'public' ? 'public' : 'private',
       season_ends: str(fd, 'seasonEnds') || null,
       market_liquidity: Math.max(100, num(fd, 'marketLiquidity') || group.market_liquidity),
       dispute_window_hours: Math.max(1, Math.min(168, num(fd, 'disputeWindowHours') || group.dispute_window_hours)),
@@ -150,7 +182,19 @@ export async function updateSettingsAction(_prev: FormState, fd: FormData): Prom
   if (res && typeof res === 'object' && 'error' in res) return res as FormState;
 
   revalidatePath(`/g/${slug}`, 'layout');
+  revalidatePath('/discover');
   return { ok: 'Settings saved.' };
+}
+
+export async function announceAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+  const res = await guard(() => announce(user.id, group.id, str(fd, 'body')));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: 'Announcement sent to every member.' };
 }
 
 // ─── markets ─────────────────────────────────────────────────────────────────
@@ -297,12 +341,37 @@ export async function kickMemberAction(_prev: FormState, fd: FormData): Promise<
   const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
   const target = num(fd, 'userId');
+  const force = !!fd.get('force');
 
-  const res = await guard(() => removeMember(user.id, group.id, target));
+  const res = await guard(() => removeMember(user.id, group.id, target, { force }));
   if (res && typeof res === 'object' && 'error' in res) return res as FormState;
 
   revalidatePath(`/g/${slug}`, 'layout');
-  return { ok: 'Member removed.' };
+  return { ok: force ? 'Member removed and their open positions forfeited.' : 'Member removed.' };
+}
+
+export async function addMemberAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+
+  const res = await guard(() => addMember(user.id, group.id, str(fd, 'identifier')));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: `${(res as { name: string }).name} was added to the group.` };
+}
+
+export async function transferOwnershipAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+  const res = await guard(() => transferOwnership(user.id, group.id, num(fd, 'userId')));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: 'Ownership handed over.' };
 }
 
 export async function memberRoleAction(_prev: FormState, fd: FormData): Promise<FormState> {
@@ -328,6 +397,39 @@ export async function regenerateInviteAction(_prev: FormState, fd: FormData): Pr
   return { ok: 'Invite code rotated. Old links no longer work.' };
 }
 
+export async function createInviteAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+
+  const expiresIn = num(fd, 'expiresInHours');
+  const maxUses = num(fd, 'maxUses');
+  const res = await guard(() =>
+    createInvite(user.id, group.id, {
+      label: str(fd, 'label'),
+      code: str(fd, 'code'),
+      expiresInHours: expiresIn > 0 ? expiresIn : null,
+      maxUses: maxUses > 0 ? maxUses : null,
+    }),
+  );
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: `Link ${(res as { code: string }).code} is live.` };
+}
+
+export async function revokeInviteAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+  const res = await guard(() => revokeInvite(user.id, group.id, num(fd, 'inviteId')));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: 'Link revoked.' };
+}
+
 export async function markNotificationsReadAction() {
   const user = await me();
   await markNotificationsRead(user.id);
@@ -339,8 +441,21 @@ export async function startNextSeasonAction(_prev: FormState, fd: FormData): Pro
   const slug = str(fd, 'slug');
   const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
-  const res = await guard(() => startNextSeason(user.id, group.id, str(fd, 'seasonEnds') || null));
+  const res = await guard(() =>
+    startNextSeason(user.id, group.id, {
+      seasonEnds: str(fd, 'seasonEnds') || null,
+      note: str(fd, 'note'),
+      nextPrize: str(fd, 'nextPrize'),
+      nextPunishment: str(fd, 'nextPunishment'),
+    }),
+  );
   if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
   revalidatePath(`/g/${slug}`, 'layout');
-  return { ok: `Season ${group.current_season + 1} started. Balances have been reset.` };
+  const close = res as { season: number; champion?: { name: string } };
+  return {
+    ok: close.champion
+      ? `Season ${close.season} closed — ${close.champion.name} won. Season ${close.season + 1} is open.`
+      : `Season ${close.season} closed. Season ${close.season + 1} is open.`,
+  };
 }

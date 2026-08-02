@@ -3,6 +3,7 @@ import { groupContext } from '@/lib/context';
 import { all } from '@/lib/db';
 import { openLegs, standings } from '@/lib/data';
 import { centsLabel, money, shares as fmtShares, signedMoney } from '@/lib/format';
+import { LeaveGroup } from '@/components/LeaveGroup';
 
 export default async function PortfolioPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -192,6 +193,13 @@ export default async function PortfolioPage({ params }: { params: Promise<{ slug
           </div>
         </section>
       )}
+
+      <LeaveGroup
+        slug={slug}
+        groupName={group.name}
+        isOwner={user.id === group.owner_id}
+        openPositions={legs.length}
+      />
     </div>
   );
 }

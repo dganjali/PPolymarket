@@ -2,10 +2,26 @@ import { headers } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { groupContext } from '@/lib/context';
-import { marketDisputes, marketOptions, marketsByGroup, membershipRequests, standings } from '@/lib/data';
+import {
+  groupInvites,
+  inviteState,
+  marketDisputes,
+  marketOptions,
+  marketsByGroup,
+  membershipRequests,
+  standings,
+} from '@/lib/data';
 import { dateLabel, money0, relative, volLabel } from '@/lib/format';
 import { AdminMarketControls } from '@/components/AdminControls';
-import { InviteCode, MemberList, MembershipRequests, SeasonControls, SettingsForm, StakesEditor } from '@/components/AdminPanels';
+import {
+  AnnouncementForm,
+  InviteManager,
+  MemberList,
+  MembershipRequests,
+  SeasonControls,
+  SettingsForm,
+  StakesEditor,
+} from '@/components/AdminPanels';
 
 export default async function AdminPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -17,11 +33,12 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
   const proto = h.get('x-forwarded-proto') ?? 'http';
   const origin = host ? `${proto}://${host}` : undefined;
 
-  const [pending, resolvable, members, joinRequests] = await Promise.all([
+  const [pending, resolvable, members, joinRequests, invites] = await Promise.all([
     marketsByGroup(group.id, ['pending']),
     marketsByGroup(group.id, ['resolving', 'closed', 'open']),
     standings(group.id, group.starting_balance),
     membershipRequests(group.id),
+    groupInvites(group.id),
   ]);
   const resolvableRows = await Promise.all(resolvable.map(async (market) => {
     const disputes = market.status === 'resolving' ? (await marketDisputes(market.id)).length : 0;
@@ -125,10 +142,29 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         </div>
       </div>
 
-      <InviteCode slug={slug} code={group.invite_code} origin={origin} />
+      <InviteManager
+        slug={slug}
+        code={group.invite_code}
+        origin={origin}
+        invites={invites.map((invite) => ({
+          id: invite.id,
+          code: invite.code,
+          label: invite.label,
+          state: inviteState(invite),
+          expiresAt: invite.expires_at,
+          maxUses: invite.max_uses,
+          uses: invite.uses,
+          createdBy: invite.created_by_name,
+        }))}
+      />
+
+      <AnnouncementForm slug={slug} />
 
       <SettingsForm
         slug={slug}
+        name={group.name}
+        description={group.description}
+        visibility={group.visibility}
         seasonEnds={group.season_ends}
         marketLiquidity={group.market_liquidity}
         disputeWindowHours={group.dispute_window_hours}
@@ -142,6 +178,14 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
           slug={slug}
           currentSeason={group.current_season}
           unfinishedMarkets={pending.length + resolvable.length}
+          prize={group.prize}
+          punishment={group.punishment}
+          champion={members[0] && { name: members[0].name, total: members[0].total }}
+          lastPlace={
+            members.length > 1
+              ? { name: members[members.length - 1].name, total: members[members.length - 1].total }
+              : undefined
+          }
         />
       )}
 
@@ -149,7 +193,14 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         slug={slug}
         ownerId={group.owner_id}
         canManageRoles={user.id === group.owner_id}
-        members={members.map((m) => ({ userId: m.userId, name: m.name, handle: m.handle, role: m.role }))}
+        members={members.map((m) => ({
+          userId: m.userId,
+          name: m.name,
+          handle: m.handle,
+          role: m.role,
+          total: m.total,
+          openPositions: m.openPositions,
+        }))}
       />
     </div>
   );

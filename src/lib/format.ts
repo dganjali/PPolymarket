@@ -30,9 +30,22 @@ export const initials = (name: string) =>
     .join('')
     .toUpperCase() || '?';
 
+/**
+ * Epoch ms for a stored timestamp. The database writes UTC as
+ * "YYYY-MM-DD HH:MM:SS", which `Date.parse` would otherwise read as local time.
+ */
+export function parseStamp(iso: string): number {
+  return Date.parse(iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ', 'T') + 'Z');
+}
+
+/** The inverse: an epoch/Date as the "YYYY-MM-DD HH:MM:SS" UTC the schema stores. */
+export function stamp(at: number | Date = Date.now()): string {
+  return new Date(at).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 /** "in 3d", "2h ago", "Jun 12" */
 export function relative(iso: string, now = Date.now()): string {
-  const t = Date.parse(iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ', 'T') + 'Z');
+  const t = parseStamp(iso);
   if (Number.isNaN(t)) return iso;
   const diff = t - now;
   const abs = Math.abs(diff);
@@ -46,9 +59,16 @@ export function relative(iso: string, now = Date.now()): string {
 }
 
 export function dateLabel(iso: string): string {
-  const t = Date.parse(iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ', 'T') + 'Z');
+  const t = parseStamp(iso);
   if (Number.isNaN(t)) return iso;
   return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/** "Jun 12, 2026" — for archives, where the year matters. */
+export function longDateLabel(iso: string): string {
+  const t = parseStamp(iso);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 /** Slugify a group name into a URL segment. */

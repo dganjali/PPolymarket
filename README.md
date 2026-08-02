@@ -20,8 +20,10 @@ npm install && npm run seed && npm run dev
 Then open http://localhost:3000 and sign in as `dawson` (the admin) or any of
 `priya`, `marcus`, `elena`, `kai`, `loic`, `tess`, `nadia`, `owen`, `sofia` —
 password `minimarket` for all of them. The seed builds a demo group with ten
-members, six live markets, a settled one, two awaiting approval, and ~180 trades
-of real price history.
+members, six live markets, a settled one, two awaiting approval, ~180 trades of
+real price history, and three invite links in different states. It also builds a
+second, public group — run by `priya`, with season one already closed and
+archived, and a join request waiting in its queue.
 
 `npm run seed` wipes and rebuilds the database. If the dev server is already
 running when you reseed, restart it — it holds an open handle to the file.
@@ -87,9 +89,18 @@ is per-market solvency.
 
 ## What's here
 
-- **Groups** — rotating invite codes, per-group bankrolls, owner-managed admin
-  roles, season archives, prize and punishment as free text. One account can be
-  in many groups; balances and markets are scoped per group.
+- **Groups** — public or invite-only, per-group bankrolls, owner-managed admin
+  roles, ownership handover, and prize and punishment as free text. Public
+  groups appear in a directory at `/discover`; private ones are reachable only
+  through a code. One account can be in many groups; balances and markets are
+  scoped per group. Members can leave, which forfeits their open positions.
+- **Invites** — a standing group code plus any number of named links, each with
+  its own expiry and headcount cap, revocable at any time. Custom codes
+  (`RIDGEVIEW-26`) or generated ones; a spent link says why it stopped working.
+- **Seasons** — closing a season archives the final standings, announces the
+  champion against the prize and the last-place finisher against the punishment,
+  and issues everyone a fresh bankroll. `/g/<slug>/seasons` keeps every past
+  season, its stakes, its closing note, and an all-time win count.
 - **Markets** — binary Yes/No or 2–8 mutually exclusive outcomes for elections,
   awards, and tournaments, plus categories, resolution rules, and close dates.
   Members propose, the admin approves (or the group turns approval off).
@@ -101,11 +112,15 @@ is per-market solvency.
   positions, and a comment thread per market.
 - **Portfolio** — open legs with cost basis and mark-to-market, settled history
   with realized P&L, standings across the group.
-- **Admin** — approval queue, resolution review, rotating invite links, stakes
-  editor, liquidity and privacy settings, join requests, member roles, and
-  season rollover.
-- **Notifications** — approvals, disputes, results, role changes and new
-  seasons appear in a personal inbox.
+- **Admin** — approval queue, resolution review, the invite manager, stakes
+  editor, group name/visibility/liquidity/privacy settings, join requests, and a
+  roster where people can be added by handle or email, promoted, demoted, or
+  removed (forfeiting their open positions if they still hold any). Owners get
+  the season rollover, which previews who is about to be crowned before it runs.
+- **Announcements** — a note from an admin that lands in the activity log and
+  every member's inbox.
+- **Notifications** — approvals, disputes, results, role changes, season results
+  and announcements appear in a personal inbox.
 
 Mobile-first, with the desktop trading view from the design at ≥1024px.
 
@@ -114,8 +129,14 @@ Mobile-first, with the desktop trading view from the design at ≥1024px.
 Credits are scarce per community and season. With member approval enabled, an
 invite creates a join request and the starting bankroll is issued only after an
 admin approves the person. A `(member, community, season)` grant ledger prevents
-leaving and rejoining from minting a second bankroll. New seasons archive the old
-standings and issue one fresh bankroll to each current member.
+leaving and rejoining from minting a second bankroll — that holds whether the
+person came back through a link, the public directory, or an admin adding them
+by hand. New seasons archive the old standings and issue one fresh bankroll to
+each current member.
+
+Public groups are the one place strangers can reach a community without a code,
+so keep join approval on if that matters. Capped and expiring invite links are
+the middle ground: one link per homeroom, good for a week, good for five people.
 
 This cannot prove that two different emails belong to one person. For larger
 school communities, keep join approval enabled and use Google sign-in with school
@@ -131,11 +152,13 @@ stake bounds the market maker's maximum loss.
 
 ```
 src/lib/amm.ts        market maker — pure, shared by server and client
-src/lib/engine.ts     transactional writes: groups, markets, trades, resolution
+src/lib/engine.ts     transactional writes: groups, invites, markets, trades,
+                      resolution, seasons
 src/lib/db.ts         SQLite locally, Postgres/Supabase in production
 src/lib/data.ts       read queries
 src/app/actions.ts    server actions
 src/app/g/[slug]/     the group app
+src/app/discover/     the public group directory
 scripts/              seed + tests
 ```
 

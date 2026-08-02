@@ -30,8 +30,24 @@ CREATE TABLE IF NOT EXISTS groups (
   dispute_window_hours INTEGER NOT NULL DEFAULT 24,
   current_season    INTEGER NOT NULL DEFAULT 1,
   season_started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  visibility        TEXT NOT NULL DEFAULT 'private',
+  description       TEXT NOT NULL DEFAULT '',
   created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS group_invites (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id    INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  code        TEXT NOT NULL UNIQUE,
+  label       TEXT NOT NULL DEFAULT '',
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  expires_at  TEXT,
+  max_uses    INTEGER,
+  uses        INTEGER NOT NULL DEFAULT 0,
+  revoked_at  TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_group_invites_group ON group_invites(group_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS memberships (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,6 +238,23 @@ CREATE TABLE IF NOT EXISTS season_results (
   UNIQUE (group_id, season_number, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_season_results_group ON season_results(group_id, season_number, rank);
+
+CREATE TABLE IF NOT EXISTS seasons (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id      INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  season_number INTEGER NOT NULL,
+  started_at    TEXT NOT NULL,
+  ended_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  prize         TEXT NOT NULL DEFAULT '',
+  punishment    TEXT NOT NULL DEFAULT '',
+  champion_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  runner_up_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  last_place_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  note          TEXT NOT NULL DEFAULT '',
+  entrants      INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (group_id, season_number)
+);
+CREATE INDEX IF NOT EXISTS idx_seasons_group ON seasons(group_id, season_number DESC);
 `;
 
 declare global {
@@ -242,6 +275,8 @@ const ADDITIONS: [table: string, column: string, ddl: string][] = [
   ['groups', 'dispute_window_hours', 'INTEGER NOT NULL DEFAULT 24'],
   ['groups', 'current_season', 'INTEGER NOT NULL DEFAULT 1'],
   ['groups', 'season_started_at', "TEXT NOT NULL DEFAULT ''"],
+  ['groups', 'visibility', "TEXT NOT NULL DEFAULT 'private'"],
+  ['groups', 'description', "TEXT NOT NULL DEFAULT ''"],
   ['markets', 'house', 'REAL NOT NULL DEFAULT 0'],
   ['markets', 'market_type', "TEXT NOT NULL DEFAULT 'binary'"],
   ['markets', 'lmsr_b', 'REAL NOT NULL DEFAULT 0'],
@@ -253,6 +288,20 @@ const ADDITIONS: [table: string, column: string, ddl: string][] = [
   ['markets', 'season_number', 'INTEGER NOT NULL DEFAULT 1'],
   ['trades', 'option_id', 'INTEGER'],
 ];
+
+/**
+ * Seasons archived before the `seasons` table existed live only in
+ * `season_results`; rebuild a header row for each so the archive page has one.
+ */
+const SEASON_BACKFILL = `(group_id, season_number, started_at, ended_at, entrants, champion_id, last_place_id)
+  SELECT r.group_id, r.season_number, MIN(r.created_at), MAX(r.created_at), COUNT(*),
+         (SELECT x.user_id FROM season_results x
+           WHERE x.group_id = r.group_id AND x.season_number = r.season_number
+           ORDER BY x.rank LIMIT 1),
+         (SELECT x.user_id FROM season_results x
+           WHERE x.group_id = r.group_id AND x.season_number = r.season_number
+           ORDER BY x.rank DESC LIMIT 1)
+    FROM season_results r GROUP BY r.group_id, r.season_number`;
 
 function migrate(db: DatabaseSync) {
   for (const [table, column, ddl] of ADDITIONS) {
@@ -272,6 +321,7 @@ function migrate(db: DatabaseSync) {
   db.exec(`INSERT OR IGNORE INTO membership_grants (user_id, group_id, season_number, granted_at)
            SELECT ms.user_id, ms.group_id, g.current_season, ms.joined_at
              FROM memberships ms JOIN groups g ON g.id = ms.group_id`);
+  db.exec(`INSERT OR IGNORE INTO seasons ${SEASON_BACKFILL}`);
 }
 
 function open(): DatabaseSync {
@@ -339,6 +389,7 @@ async function ensurePostgres(): Promise<void> {
            FROM memberships ms JOIN groups g ON g.id = ms.group_id
          ON CONFLICT DO NOTHING`,
       );
+      await pg.unsafe(`INSERT INTO seasons ${SEASON_BACKFILL} ON CONFLICT DO NOTHING`);
     })();
   }
   await globalThis.__minimarketPgReady;

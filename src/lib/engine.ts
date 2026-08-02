@@ -15,17 +15,20 @@ import {
 } from './categorical';
 import {
   categoricalState,
-  groupByCode,
+  groupByAnyCode,
+  inviteState,
   marketById,
   marketOptions,
   marketRestrictionFor,
   membership,
   reserves,
   standings,
+  userByIdentifier,
   type GroupRow,
+  type InviteRow,
   type MarketRow,
 } from './data';
-import { money, shares as fmtShares, slugify } from './format';
+import { money, shares as fmtShares, slugify, stamp } from './format';
 
 export class AppError extends Error {}
 
@@ -54,6 +57,51 @@ function randomCode(): string {
   return out;
 }
 
+/** True if `code` is already spoken for, as a group code or an invite link. */
+async function codeTaken(code: string): Promise<boolean> {
+  return !!(
+    (await get('SELECT id FROM groups WHERE invite_code = ?', code)) ||
+    (await get('SELECT id FROM group_invites WHERE code = ?', code))
+  );
+}
+
+async function freshCode(): Promise<string> {
+  let code = randomCode();
+  while (await codeTaken(code)) code = randomCode();
+  return code;
+}
+
+/**
+ * Credits a member their season bankroll, unless this account already drew one
+ * for this community and season — leaving and rejoining must not mint a second.
+ */
+async function issueMembership(
+  userId: number,
+  group: Pick<GroupRow, 'id' | 'current_season' | 'starting_balance'>,
+  role: 'admin' | 'member',
+) {
+  const alreadyGranted = !!(await get(
+    'SELECT id FROM membership_grants WHERE user_id = ? AND group_id = ? AND season_number = ?',
+    userId,
+    group.id,
+    group.current_season,
+  ));
+  await run(
+    'INSERT INTO memberships (user_id, group_id, role, balance) VALUES (?, ?, ?, ?)',
+    userId,
+    group.id,
+    role,
+    alreadyGranted ? 0 : group.starting_balance,
+  );
+  await run(
+    'INSERT OR IGNORE INTO membership_grants (user_id, group_id, season_number) VALUES (?, ?, ?)',
+    userId,
+    group.id,
+    group.current_season,
+  );
+  return { issued: !alreadyGranted };
+}
+
 // ─── groups ──────────────────────────────────────────────────────────────────
 
 export async function createGroup(
@@ -66,6 +114,8 @@ export async function createGroup(
     prize: string;
     punishment: string;
     requireMemberApproval?: boolean;
+    visibility?: 'public' | 'private';
+    description?: string;
   },
 ): Promise<GroupRow> {
   const name = input.name.trim();
@@ -79,13 +129,15 @@ export async function createGroup(
     let n = 2;
     while (await get('SELECT id FROM groups WHERE slug = ?', slug)) slug = `${slugify(name)}-${n++}`;
 
-    let code = randomCode();
-    while (await get('SELECT id FROM groups WHERE invite_code = ?', code)) code = randomCode();
+    const code = await freshCode();
 
     const res = await run(
+      // season_started_at is written explicitly: on databases where the column
+      // arrived by migration its default is '', not now().
       `INSERT INTO groups (slug, name, invite_code, owner_id, starting_balance, market_liquidity,
-                           season_ends, prize, punishment, require_member_approval)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                           season_ends, prize, punishment, require_member_approval, visibility, description,
+                           season_started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       slug,
       name,
       code,
@@ -96,70 +148,115 @@ export async function createGroup(
       input.prize.trim(),
       input.punishment.trim(),
       input.requireMemberApproval === false ? 0 : 1,
+      input.visibility === 'public' ? 'public' : 'private',
+      (input.description ?? '').trim().slice(0, 280),
     );
     const groupId = Number(res.lastInsertRowid);
 
-    await run(
-      'INSERT INTO memberships (user_id, group_id, role, balance) VALUES (?, ?, ?, ?)',
-      userId,
-      groupId,
-      'admin',
-      starting,
-    );
-    await run(
-      'INSERT INTO membership_grants (user_id, group_id, season_number) VALUES (?, ?, 1)',
-      userId,
-      groupId,
-    );
+    await issueMembership(userId, { id: groupId, current_season: 1, starting_balance: starting }, 'admin');
     await logEvent(groupId, null, userId, 'group', 'opened the group');
     return (await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId))!;
   });
 }
 
-export async function joinGroup(userId: number, code: string): Promise<GroupRow & { join_status: 'joined' | 'pending' }> {
-  const group = await groupByCode(code);
-  if (!group) fail('No group with that invite code.');
-  if (await membership(userId, group.id)) return { ...group, join_status: 'joined' };
+export type JoinResult = GroupRow & { join_status: 'joined' | 'pending' };
+
+/**
+ * Admits a user to a group, or files a join request when the group screens
+ * members. `invite` is the link they arrived on, so its use can be counted.
+ */
+async function admit(userId: number, group: GroupRow, invite?: InviteRow): Promise<JoinResult> {
+  const existing = await membership(userId, group.id);
+  if (existing) return { ...group, join_status: 'joined' };
+
+  const spendInvite = async () => {
+    if (invite) await run('UPDATE group_invites SET uses = uses + 1 WHERE id = ?', invite.id);
+  };
 
   if (group.require_member_approval) {
     if (await get('SELECT id FROM membership_requests WHERE user_id = ? AND group_id = ?', userId, group.id)) {
       return { ...group, join_status: 'pending' };
     }
     await tx(async () => {
-      await run(
-        'INSERT INTO membership_requests (user_id, group_id) VALUES (?, ?)',
-        userId,
-        group.id,
-      );
+      await run('INSERT INTO membership_requests (user_id, group_id) VALUES (?, ?)', userId, group.id);
+      await spendInvite();
       await notifyAdmins(group.id, userId, null, 'member', 'A person requested to join your community.');
     });
     return { ...group, join_status: 'pending' };
   }
 
   await tx(async () => {
-    const alreadyGranted = !!(await get(
-      'SELECT id FROM membership_grants WHERE user_id = ? AND group_id = ? AND season_number = ?',
-      userId,
-      group.id,
-      group.current_season,
-    ));
-    await run(
-      'INSERT INTO memberships (user_id, group_id, role, balance) VALUES (?, ?, ?, ?)',
-      userId,
-      group.id,
-      'member',
-      alreadyGranted ? 0 : group.starting_balance,
-    );
-    await run(
-      'INSERT OR IGNORE INTO membership_grants (user_id, group_id, season_number) VALUES (?, ?, ?)',
-      userId,
-      group.id,
-      group.current_season,
-    );
+    await issueMembership(userId, group, 'member');
+    await spendInvite();
     await logEvent(group.id, null, userId, 'join', 'joined the group');
     await notifyAdmins(group.id, userId, null, 'member', 'A new member joined your community.');
   });
   return { ...group, join_status: 'joined' };
+}
+
+export async function joinGroup(userId: number, code: string): Promise<JoinResult> {
+  const found = await groupByAnyCode(code);
+  if (!found) fail('No group with that invite code.');
+  const { group, invite } = found;
+
+  if (invite && !(await membership(userId, group.id))) {
+    const state = inviteState(invite);
+    if (state !== 'active') fail(`That invite link is ${state}. Ask an admin for a new one.`);
+  }
+  return admit(userId, group, invite);
+}
+
+/** Joining straight from the public directory, with no code in hand. */
+export async function joinPublicGroup(userId: number, groupId: number): Promise<JoinResult> {
+  const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  if (group.visibility !== 'public') fail('That community is invite-only.');
+  return admit(userId, group);
+}
+
+export async function createInvite(
+  userId: number,
+  groupId: number,
+  input: { label?: string; code?: string; expiresInHours?: number | null; maxUses?: number | null },
+): Promise<InviteRow> {
+  await requireAdmin(userId, groupId);
+
+  let code: string;
+  if (input.code?.trim()) {
+    code = input.code.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    if (code.length < 4 || code.length > 24) fail('A custom code is 4–24 letters, numbers, or dashes.');
+    if (await codeTaken(code)) fail('That code is already in use.');
+  } else {
+    code = await freshCode();
+  }
+
+  const hours = input.expiresInHours ?? null;
+  const expiresAt = hours && hours > 0 ? stamp(Date.now() + Math.min(hours, 24 * 365) * 3_600_000) : null;
+  const maxUses = input.maxUses && input.maxUses > 0 ? Math.min(Math.round(input.maxUses), 10_000) : null;
+
+  const res = await run(
+    `INSERT INTO group_invites (group_id, code, label, created_by, expires_at, max_uses)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    groupId,
+    code,
+    (input.label ?? '').trim().slice(0, 60),
+    userId,
+    expiresAt,
+    maxUses,
+  );
+  await logEvent(groupId, null, userId, 'group', `created the invite link ${code}`);
+  return (await get<InviteRow>('SELECT * FROM group_invites WHERE id = ?', Number(res.lastInsertRowid)))!;
+}
+
+export async function revokeInvite(userId: number, groupId: number, inviteId: number) {
+  await requireAdmin(userId, groupId);
+  const invite = await get<InviteRow>(
+    'SELECT * FROM group_invites WHERE id = ? AND group_id = ?',
+    inviteId,
+    groupId,
+  ) ?? fail('That invite link no longer exists.');
+  if (invite.revoked_at) return;
+  await run("UPDATE group_invites SET revoked_at = datetime('now') WHERE id = ?", inviteId);
+  await logEvent(groupId, null, userId, 'group', `revoked the invite link ${invite.code}`);
 }
 
 export async function reviewMembershipRequest(
@@ -176,25 +273,7 @@ export async function reviewMembershipRequest(
 
   await tx(async () => {
     if (decision === 'approve') {
-      const alreadyGranted = !!(await get(
-        'SELECT id FROM membership_grants WHERE user_id = ? AND group_id = ? AND season_number = ?',
-        targetId,
-        groupId,
-        group.current_season,
-      ));
-      await run(
-        'INSERT INTO memberships (user_id, group_id, role, balance) VALUES (?, ?, ?, ?)',
-        targetId,
-        groupId,
-        'member',
-        alreadyGranted ? 0 : group.starting_balance,
-      );
-      await run(
-        'INSERT OR IGNORE INTO membership_grants (user_id, group_id, season_number) VALUES (?, ?, ?)',
-        targetId,
-        groupId,
-        group.current_season,
-      );
+      await issueMembership(targetId, group, 'member');
       const target = await get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId);
       await logEvent(groupId, null, userId, 'join', `approved ${target?.name ?? 'a new member'}`);
       await notifyUser(targetId, groupId, null, 'member', `You were approved to join ${group.name}.`);
@@ -217,7 +296,51 @@ export async function requireAdmin(userId: number, groupId: number) {
   return ms;
 }
 
-export async function removeMember(userId: number, groupId: number, targetId: number) {
+/** How many live legs a member still holds in a group. */
+async function openLegCount(userId: number, groupId: number): Promise<number> {
+  const binary = (await get<{ n: number }>(
+    `SELECT CAST(COUNT(*) AS INTEGER) AS n FROM positions p JOIN markets m ON m.id = p.market_id
+      WHERE p.user_id = ? AND m.group_id = ? AND m.status IN ('open','closed','resolving')
+        AND (p.yes_shares > 0.0001 OR p.no_shares > 0.0001)`,
+    userId,
+    groupId,
+  ))!.n;
+  const categorical = (await get<{ n: number }>(
+    `SELECT CAST(COUNT(*) AS INTEGER) AS n FROM option_positions p JOIN markets m ON m.id = p.market_id
+      WHERE p.user_id = ? AND m.group_id = ? AND m.status IN ('open','closed','resolving')
+        AND p.shares > 0.0001`,
+    userId,
+    groupId,
+  ))!.n;
+  return binary + categorical;
+}
+
+/**
+ * Drops a departing member's live legs. Their shares stop being a claim on the
+ * pool, so the market can only end up over-collateralised — what they forfeit
+ * falls through to the LP return at resolution.
+ */
+async function forfeitOpenLegs(userId: number, groupId: number) {
+  await run(
+    `DELETE FROM positions WHERE user_id = ? AND market_id IN
+       (SELECT id FROM markets WHERE group_id = ? AND status IN ('open','closed','resolving'))`,
+    userId,
+    groupId,
+  );
+  await run(
+    `DELETE FROM option_positions WHERE user_id = ? AND market_id IN
+       (SELECT id FROM markets WHERE group_id = ? AND status IN ('open','closed','resolving'))`,
+    userId,
+    groupId,
+  );
+}
+
+export async function removeMember(
+  userId: number,
+  groupId: number,
+  targetId: number,
+  options: { force?: boolean } = {},
+) {
   await requireAdmin(userId, groupId);
   const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId);
   if (!group) fail('Group not found.');
@@ -226,25 +349,91 @@ export async function removeMember(userId: number, groupId: number, targetId: nu
   if (targetMembership.role === 'admin' && userId !== group.owner_id) {
     fail('Only the owner can remove another admin.');
   }
-  const openPositions = (await get<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM positions p JOIN markets m ON m.id = p.market_id
-      WHERE p.user_id = ? AND m.group_id = ? AND m.status IN ('open','closed','resolving')
-        AND (p.yes_shares > 0.0001 OR p.no_shares > 0.0001)`,
-    targetId,
-    groupId,
-  ))!.n;
-  const openOptionPositions = (await get<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM option_positions p JOIN markets m ON m.id = p.market_id
-      WHERE p.user_id = ? AND m.group_id = ? AND m.status IN ('open','closed','resolving')
-        AND p.shares > 0.0001`,
-    targetId,
-    groupId,
-  ))!.n;
-  if (openPositions || openOptionPositions) fail('Resolve or sell this member’s open positions before removing them.');
+  const open = await openLegCount(targetId, groupId);
+  if (open && !options.force) {
+    fail(`They hold ${open} open position${open === 1 ? '' : 's'}. Sell those first, or remove and forfeit them.`);
+  }
   const target = await get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId);
   await tx(async () => {
+    if (open) await forfeitOpenLegs(targetId, groupId);
     await run('DELETE FROM memberships WHERE user_id = ? AND group_id = ?', targetId, groupId);
-    await logEvent(groupId, null, userId, 'group', `removed ${target?.name ?? 'a member'} from the group`);
+    await run('DELETE FROM membership_requests WHERE user_id = ? AND group_id = ?', targetId, groupId);
+    await logEvent(
+      groupId,
+      null,
+      userId,
+      'group',
+      `removed ${target?.name ?? 'a member'} from the group` +
+        (open ? ` — ${open} open position${open === 1 ? '' : 's'} forfeited` : ''),
+    );
+    await notifyUser(targetId, groupId, null, 'member', `You were removed from ${group.name}.`);
+  });
+}
+
+/** An admin adding somebody who already has an account, by handle or email. */
+export async function addMember(userId: number, groupId: number, identifier: string) {
+  await requireAdmin(userId, groupId);
+  const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  const target = await userByIdentifier(identifier);
+  if (!target) fail('No account with that handle or email. Send them an invite link instead.');
+  if (await membership(target.id, groupId)) fail(`${target.name} is already in this group.`);
+
+  await tx(async () => {
+    const { issued } = await issueMembership(target.id, group, 'member');
+    await run('DELETE FROM membership_requests WHERE user_id = ? AND group_id = ?', target.id, groupId);
+    await logEvent(groupId, null, userId, 'join', `added ${target.name} to the group`);
+    await notifyUser(
+      target.id,
+      groupId,
+      null,
+      'member',
+      issued
+        ? `An admin added you to ${group.name} with ${money(group.starting_balance)} to trade.`
+        : `An admin added you back to ${group.name}. You already drew this season's bankroll.`,
+    );
+  });
+  return target;
+}
+
+/** A member showing themselves out. The owner has to hand the group over first. */
+export async function leaveGroup(userId: number, groupId: number) {
+  const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  await requireMember(userId, groupId);
+  if (group.owner_id === userId) fail('Hand the group to another admin before you leave it.');
+  const open = await openLegCount(userId, groupId);
+
+  await tx(async () => {
+    if (open) await forfeitOpenLegs(userId, groupId);
+    await run('DELETE FROM memberships WHERE user_id = ? AND group_id = ?', userId, groupId);
+    await logEvent(groupId, null, userId, 'group', 'left the group');
+  });
+  return { forfeited: open };
+}
+
+export async function transferOwnership(userId: number, groupId: number, targetId: number) {
+  const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  if (group.owner_id !== userId) fail('Only the community owner can hand the group over.');
+  if (targetId === userId) fail('You already own this group.');
+  await requireMember(targetId, groupId);
+  const target = (await get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId))!;
+
+  await tx(async () => {
+    await run('UPDATE groups SET owner_id = ? WHERE id = ?', targetId, groupId);
+    await run("UPDATE memberships SET role = 'admin' WHERE user_id = ? AND group_id = ?", targetId, groupId);
+    await logEvent(groupId, null, userId, 'group', `handed the group over to ${target.name}`);
+    await notifyUser(targetId, groupId, null, 'role', `You now own ${group.name}.`);
+  });
+}
+
+/** A note from an admin that lands in the activity log and every member's inbox. */
+export async function announce(userId: number, groupId: number, body: string) {
+  await requireAdmin(userId, groupId);
+  const group = (await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId))!;
+  const text = body.trim().slice(0, 600);
+  if (text.length < 3) fail('Write the announcement first.');
+  await tx(async () => {
+    await logEvent(groupId, null, userId, 'announcement', text);
+    await notifyMembers(groupId, userId, null, 'announcement', `${group.name}: ${text}`);
   });
 }
 
@@ -254,7 +443,17 @@ export async function updateGroup(
   patch: Partial<
     Pick<
       GroupRow,
-      'prize' | 'punishment' | 'season_ends' | 'positions_public' | 'require_approval' | 'require_member_approval' | 'market_liquidity' | 'dispute_window_hours'
+      | 'name'
+      | 'description'
+      | 'visibility'
+      | 'prize'
+      | 'punishment'
+      | 'season_ends'
+      | 'positions_public'
+      | 'require_approval'
+      | 'require_member_approval'
+      | 'market_liquidity'
+      | 'dispute_window_hours'
     >
   >,
 ) {
@@ -263,8 +462,10 @@ export async function updateGroup(
   const values: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) continue;
+    if (k === 'name' && String(v).trim().length < 2) fail('Give the group a name.');
+    if (k === 'visibility' && v !== 'public' && v !== 'private') fail('Pick public or invite-only.');
     fields.push(`${k} = ?`);
-    values.push(v);
+    values.push(typeof v === 'string' ? v.trim() : v);
   }
   if (!fields.length) return;
   await run(`UPDATE groups SET ${fields.join(', ')} WHERE id = ?`, ...values, groupId);
@@ -475,8 +676,7 @@ export async function setMemberRole(
 
 export async function regenerateInviteCode(userId: number, groupId: number): Promise<string> {
   await requireAdmin(userId, groupId);
-  let code = randomCode();
-  while (await get('SELECT id FROM groups WHERE invite_code = ?', code)) code = randomCode();
+  const code = await freshCode();
   await run('UPDATE groups SET invite_code = ? WHERE id = ?', code, groupId);
   await logEvent(groupId, null, userId, 'group', 'rotated the invite code');
   return code;
@@ -486,18 +686,70 @@ export async function markNotificationsRead(userId: number) {
   await run("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND read_at IS NULL", userId);
 }
 
-export async function startNextSeason(userId: number, groupId: number, seasonEnds: string | null) {
+export interface SeasonClose {
+  season: number;
+  champion?: { userId: number; name: string; total: number };
+  lastPlace?: { userId: number; name: string; total: number };
+  prize: string;
+  punishment: string;
+  entrants: number;
+}
+
+/** The line that goes in the activity log and everybody's inbox. */
+function seasonHeadline(group: GroupRow, close: SeasonClose): string {
+  if (!close.champion) return `Season ${close.season} closed with nobody on the board.`;
+  const parts = [
+    `Season ${close.season} of ${group.name} goes to ${close.champion.name} at ${money(close.champion.total)}.`,
+  ];
+  if (close.prize) parts.push(`They win: ${close.prize}`);
+  if (close.lastPlace && close.lastPlace.userId !== close.champion.userId) {
+    parts.push(`Last place: ${close.lastPlace.name} at ${money(close.lastPlace.total)}.`);
+    if (close.punishment) parts.push(`They owe: ${close.punishment}`);
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Closes the current season: archives the standings, announces the champion and
+ * the last-place finisher against the stakes that were on the table, then issues
+ * everyone a fresh bankroll for the next one.
+ */
+export async function startNextSeason(
+  userId: number,
+  groupId: number,
+  input: {
+    seasonEnds?: string | null;
+    note?: string;
+    nextPrize?: string | null;
+    nextPunishment?: string | null;
+  } = {},
+): Promise<SeasonClose> {
   await requireAdmin(userId, groupId);
   const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
   if (group.owner_id !== userId) fail('Only the community owner can start a new season.');
   const unfinished = (await get<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM markets
+    `SELECT CAST(COUNT(*) AS INTEGER) AS n FROM markets
       WHERE group_id = ? AND season_number = ? AND status NOT IN ('resolved','rejected')`,
     groupId,
     group.current_season,
   ))!.n;
   if (unfinished) fail('Resolve or reject every current-season market first.');
+
   const rows = await standings(groupId, group.starting_balance);
+  const top = rows[0];
+  const bottom = rows.length > 1 ? rows[rows.length - 1] : undefined;
+  const note = (input.note ?? '').trim().slice(0, 600);
+  const close: SeasonClose = {
+    season: group.current_season,
+    champion: top && { userId: top.userId, name: top.name, total: top.total },
+    lastPlace: bottom && { userId: bottom.userId, name: bottom.name, total: bottom.total },
+    prize: group.prize,
+    punishment: group.punishment,
+    entrants: rows.length,
+  };
+  const headline = seasonHeadline(group, close);
+  const nextPrize = input.nextPrize?.trim();
+  const nextPunishment = input.nextPunishment?.trim();
 
   await tx(async () => {
     for (const [index, row] of rows.entries()) {
@@ -514,9 +766,27 @@ export async function startNextSeason(userId: number, groupId: number, seasonEnd
       );
     }
     await run(
+      `INSERT INTO seasons
+        (group_id, season_number, started_at, prize, punishment,
+         champion_id, runner_up_id, last_place_id, note, entrants)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      groupId,
+      group.current_season,
+      group.season_started_at,
+      group.prize,
+      group.punishment,
+      close.champion?.userId ?? null,
+      rows[1]?.userId ?? null,
+      close.lastPlace?.userId ?? null,
+      note,
+      rows.length,
+    );
+    await run(
       `UPDATE groups SET current_season = current_season + 1, season_started_at = datetime('now'),
-              season_ends = ? WHERE id = ?`,
-      seasonEnds || null,
+              season_ends = ?, prize = ?, punishment = ? WHERE id = ?`,
+      input.seasonEnds || null,
+      nextPrize === undefined || nextPrize === '' ? group.prize : nextPrize,
+      nextPunishment === undefined || nextPunishment === '' ? group.punishment : nextPunishment,
       groupId,
     );
     await run('UPDATE memberships SET balance = ? WHERE group_id = ?', group.starting_balance, groupId);
@@ -526,9 +796,32 @@ export async function startNextSeason(userId: number, groupId: number, seasonEnd
       group.current_season + 1,
       groupId,
     );
-    await logEvent(groupId, null, userId, 'season', `started season ${group.current_season + 1}`);
-    await notifyMembers(groupId, userId, null, 'season', `${group.name} season ${group.current_season + 1} has started.`);
+
+    await logEvent(groupId, null, userId, 'season', headline);
+    if (note) await logEvent(groupId, null, userId, 'announcement', note);
+    await notifyMembers(groupId, userId, null, 'season', headline);
+    if (close.champion && close.champion.userId !== userId) {
+      await notifyUser(
+        close.champion.userId,
+        groupId,
+        null,
+        'season',
+        `You won season ${close.season} of ${group.name}.${group.prize ? ` Prize: ${group.prize}` : ''}`,
+      );
+    }
+    if (close.lastPlace && close.lastPlace.userId !== userId && close.lastPlace.userId !== close.champion?.userId) {
+      await notifyUser(
+        close.lastPlace.userId,
+        groupId,
+        null,
+        'season',
+        `You finished last in season ${close.season} of ${group.name}.${group.punishment ? ` Forfeit: ${group.punishment}` : ''}`,
+      );
+    }
+    await logEvent(groupId, null, userId, 'season', `opened season ${group.current_season + 1}`);
   });
+
+  return close;
 }
 
 async function notifyUser(
@@ -804,7 +1097,7 @@ export async function finalizeResolution(userId: number, marketId: number) {
   await requireAdmin(userId, m.group_id);
   if (m.status !== 'resolving' || !m.proposed_outcome) fail('There is no proposed result to finalize.');
   const review = (await get<{ disputes: number; expired: number }>(
-    `SELECT (SELECT COUNT(*) FROM market_disputes WHERE market_id = m.id) AS disputes,
+    `SELECT (SELECT CAST(COUNT(*) AS INTEGER) FROM market_disputes WHERE market_id = m.id) AS disputes,
             m.dispute_ends_at <= datetime('now') AS expired FROM markets m WHERE m.id = ?`,
     marketId,
   ))!;

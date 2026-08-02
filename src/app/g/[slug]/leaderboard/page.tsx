@@ -1,16 +1,17 @@
+import Link from 'next/link';
 import { groupContext } from '@/lib/context';
-import { seasonHistory, standings } from '@/lib/data';
+import { seasonArchive, standings } from '@/lib/data';
 import { dateLabel, money, money0, signedMoney } from '@/lib/format';
 import { Avatar } from '@/components/ui';
 
 export default async function LeaderboardPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const { user, group } = await groupContext(slug);
-  const [rows, history] = await Promise.all([
+  const { user, group, base } = await groupContext(slug);
+  const [rows, seasons] = await Promise.all([
     standings(group.id, group.starting_balance),
-    seasonHistory(group.id),
+    seasonArchive(group.id),
   ]);
-  const champions = history.filter((row) => row.rank === 1);
+  const champions = seasons.filter((season) => season.champion_name);
 
   const daysLeft = group.season_ends
     ? Math.max(0, Math.ceil((Date.parse(group.season_ends) - Date.now()) / 86_400_000))
@@ -53,15 +54,41 @@ export default async function LeaderboardPage({ params }: { params: Promise<{ sl
 
       {champions.length > 0 && (
         <section>
-          <h2 style={{ fontSize: 15, fontWeight: 600, margin: '0 0 10px' }}>Past champions</h2>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Past champions</h2>
+            <Link href={`${base}/seasons`} className="mono" style={{ fontSize: 10, color: 'var(--gold)' }}>
+              FULL ARCHIVE
+            </Link>
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {champions.map((champion) => (
-              <div key={champion.season_number} className="card" style={{ padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div className="mono" style={{ color: 'var(--gold)', fontSize: 11 }}>S{champion.season_number}</div>
-                <Avatar name={champion.name} size={28} radius={8} />
-                <div style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{champion.name}</div>
-                <div className="mono" style={{ fontSize: 12 }}>{money0(champion.final_total)}</div>
-              </div>
+            {champions.slice(0, 4).map((season) => (
+              <Link
+                key={season.season_number}
+                href={`${base}/seasons`}
+                className="card"
+                style={{ padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}
+              >
+                <div className="mono" style={{ color: 'var(--gold)', fontSize: 11 }}>S{season.season_number}</div>
+                <Avatar name={season.champion_name!} size={28} radius={8} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600 }}>{season.champion_name}</div>
+                  {season.prize && (
+                    <div
+                      className="mono"
+                      style={{
+                        fontSize: 10,
+                        color: 'var(--dim)',
+                        marginTop: 2,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      won {season.prize.toLowerCase()}
+                    </div>
+                  )}
+                </div>
+              </Link>
             ))}
           </div>
         </section>

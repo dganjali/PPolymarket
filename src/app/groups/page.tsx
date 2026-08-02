@@ -57,8 +57,9 @@ export default async function GroupsPage() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14.5, fontWeight: 600 }}>{g.name}</div>
               <div className="mono" style={{ fontSize: 10, color: 'var(--dim)', marginTop: 2 }}>
-                {g.members} member{g.members === 1 ? '' : 's'}
+                {g.members} member{g.members === 1 ? '' : 's'} · season {g.current_season}
                 {g.role === 'admin' ? ' · admin' : ''}
+                {g.visibility === 'public' ? ' · public' : ''}
               </div>
             </div>
             <div className="mono" style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>
@@ -78,6 +79,9 @@ export default async function GroupsPage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 'auto' }}>
         <Link href="/join" className="btn btn-primary">
           Join with an invite code
+        </Link>
+        <Link href="/discover" className="btn btn-ghost">
+          Browse public communities
         </Link>
         <Link href="/new-group" className="btn btn-ghost">
           Start a new group
