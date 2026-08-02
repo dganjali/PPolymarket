@@ -39,8 +39,13 @@ running when you reseed, restart it — it holds an open handle to the file.
 Set `DATABASE_PATH` to move the local SQLite file (default
 `data/minimarket.db`). Production uses Postgres whenever `POSTGRES_URL` or
 `DATABASE_URL` is set; Supabase's transaction-pooler connection string is the
-recommended Vercel configuration. Set `SESSION_SECRET` to something real before
-putting this anywhere shared.
+recommended Vercel configuration.
+
+**`SESSION_SECRET` is required in production.** Without it the app cannot sign
+anybody in — it says so on the sign-in page and in the logs rather than failing
+mysteriously, but nothing works until it is set. Generate one with
+`openssl rand -base64 32` and put it in the hosting environment. Local
+development falls back to a fixed development key, so it needs no setup.
 
 ## Signing in
 

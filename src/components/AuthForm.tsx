@@ -23,17 +23,25 @@ export function AuthForm({
   next,
   googleEnabled,
   externalError,
+  configError,
 }: {
   mode: 'login' | 'signup';
   next?: string;
   googleEnabled: boolean;
   externalError?: string;
+  /** Set when the deployment itself cannot sign anybody in. */
+  configError?: string;
 }) {
   const action = mode === 'signup' ? signupAction : loginAction;
   const [state, formAction] = useActionState(action, empty);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {configError && (
+        <div className="error" style={{ lineHeight: 1.55 }}>
+          {configError}
+        </div>
+      )}
     <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <input type="hidden" name="next" value={next ?? '/groups'} />
 
@@ -86,7 +94,10 @@ export function AuthForm({
         />
       </div>
 
-      {(state.error || externalError) && <div className="error">{state.error || externalError}</div>}
+      {/* When the deployment itself is broken the banner above already says so. */}
+      {!configError && (state.error || externalError) && (
+        <div className="error">{state.error || externalError}</div>
+      )}
 
       <SubmitButton pendingLabel="…">
         {mode === 'signup' ? 'Create account' : 'Sign in'}

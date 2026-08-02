@@ -76,14 +76,19 @@ export async function signupAction(_prev: FormState, fd: FormData): Promise<Form
   );
   if ('error' in res) return res as FormState;
 
-  await setSession((res as { id: number }).id);
+  const opened = await guard(() => setSession((res as { id: number }).id));
+  if (opened && typeof opened === 'object' && 'error' in opened) return opened as FormState;
   redirect(next);
 }
 
 export async function loginAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await authenticate(str(fd, 'identifier'), String(fd.get('password') ?? ''));
   if (!user) return { error: 'Wrong email, handle, or password.' };
-  await setSession(user.id);
+
+  // A deployment with no SESSION_SECRET cannot open a session at all; say that
+  // on the form rather than failing the request with an opaque digest.
+  const opened = await guard(() => setSession(user.id));
+  if (opened && typeof opened === 'object' && 'error' in opened) return opened as FormState;
   redirect(safeNext(str(fd, 'next') || '/'));
 }
 
@@ -126,7 +131,8 @@ export async function magicSignInAction(_prev: FormState, fd: FormData): Promise
   if ('error' in res) return res as FormState;
 
   const { user, nextPath } = res as { user: { id: number }; nextPath: string };
-  await setSession(user.id);
+  const opened = await guard(() => setSession(user.id));
+  if (opened && typeof opened === 'object' && 'error' in opened) return opened as FormState;
   redirect(nextPath);
 }
 

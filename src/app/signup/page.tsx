@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { AuthForm } from '@/components/AuthForm';
-import { currentUser } from '@/lib/auth';
+import { currentUser, SESSION_MISCONFIGURED, sessionsConfigured } from '@/lib/auth';
 
 export default async function SignupPage({
   searchParams,
@@ -30,6 +30,7 @@ export default async function SignupPage({
         next={next}
         googleEnabled={!!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)}
         externalError={error === 'google_failed' ? 'Google sign-in could not be completed. Please try again.' : undefined}
+        configError={sessionsConfigured() ? undefined : SESSION_MISCONFIGURED}
       />
     </main>
   );

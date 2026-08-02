@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { AuthForm } from '@/components/AuthForm';
-import { currentUser } from '@/lib/auth';
+import { currentUser, SESSION_MISCONFIGURED, sessionsConfigured } from '@/lib/auth';
 
 export default async function LoginPage({
   searchParams,
@@ -31,6 +31,7 @@ export default async function LoginPage({
         next={next}
         googleEnabled={!!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)}
         externalError={externalError}
+        configError={sessionsConfigured() ? undefined : SESSION_MISCONFIGURED}
       />
     </main>
   );
