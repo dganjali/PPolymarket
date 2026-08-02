@@ -5,7 +5,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { authenticate, clearSession, createUser, currentUser, setSession } from '@/lib/auth';
 import { groupBySlug } from '@/lib/data';
-import { AppError } from '@/lib/errors';
+import { AppError, isUniqueViolation } from '@/lib/errors';
 import { consumeMagicLink, requestMagicLink, TTL_MINUTES } from '@/lib/magic';
 import { updateProfile } from '@/lib/users';
 import {
@@ -50,16 +50,31 @@ const str = (fd: FormData, k: string) => String(fd.get(k) ?? '').trim();
 const num = (fd: FormData, k: string) => Number(fd.get(k) ?? 0);
 const safeNext = (value: string) => value.startsWith('/') && !value.startsWith('//') ? value : '/';
 
-/** Turns thrown AppErrors into form state; anything else is a real bug. */
+/**
+ * Turns a thrown error into something the form can show.
+ *
+ * An unexpected failure used to escape and replace the whole page with Next's
+ * "Application error" and a digest — a failed bet took the market screen down
+ * with it, and the only way to find out why was the hosting provider's logs.
+ * Now the page survives, the person gets told, and the real reason is logged
+ * with a code they can quote.
+ */
 async function guard<T>(fn: () => Promise<T> | T): Promise<T | FormState> {
   try {
     return await fn();
   } catch (err) {
     if (err instanceof AppError) return { error: err.message };
-    if (err instanceof Error && /UNIQUE|constraint/i.test(err.message)) {
-      return { error: 'That already exists.' };
-    }
-    throw err;
+    if (isUniqueViolation(err)) return { error: 'That already exists.' };
+    // redirect() and notFound() work by throwing; those have to pass through.
+    if (typeof (err as { digest?: unknown })?.digest === 'string') throw err;
+
+    const code = (err as { code?: unknown })?.code;
+    console.error('[action] unexpected failure:', code ?? '', err);
+    return {
+      error:
+        'Something went wrong on our side, so nothing was changed. Try again — and if it keeps ' +
+        `happening, quote this: ${typeof code === 'string' ? code : 'no code'}.`,
+    };
   }
 }
 

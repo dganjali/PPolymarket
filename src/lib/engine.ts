@@ -1306,11 +1306,16 @@ export async function buyCategorical(
     );
     await run('UPDATE market_options SET quantity = ? WHERE id = ?', quote.quantitiesAfter[optionIndex], optionId);
     await run('UPDATE memberships SET balance = balance - ? WHERE id = ?', spend, ms.id);
+    // Both sides of each sum are qualified on purpose. Postgres reads a bare
+    // "shares" here as ambiguous between the existing row and excluded and
+    // refuses the whole statement; SQLite resolves it silently, which is why
+    // multiple-choice betting only ever broke in production.
     await run(
       `INSERT INTO option_positions (market_id, option_id, user_id, shares, cost)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(option_id, user_id) DO UPDATE SET
-         shares = shares + excluded.shares, cost = cost + excluded.cost`,
+         shares = option_positions.shares + excluded.shares,
+         cost = option_positions.cost + excluded.cost`,
       marketId,
       optionId,
       userId,
