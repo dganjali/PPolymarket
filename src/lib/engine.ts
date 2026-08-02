@@ -29,8 +29,9 @@ import {
   type MarketRow,
 } from './data';
 import { money, shares as fmtShares, slugify, stamp } from './format';
+import { AppError } from './errors';
 
-export class AppError extends Error {}
+export { AppError };
 
 function fail(msg: string): never {
   throw new AppError(msg);

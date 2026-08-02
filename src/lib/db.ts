@@ -369,30 +369,51 @@ function postgresSchema(): string {
     .replace(/datetime\('now'\)/g, pgNow);
 }
 
+/** Arbitrary but fixed: the advisory-lock key guarding schema setup. */
+const BOOTSTRAP_LOCK = 4_021_968_517;
+
+/**
+ * Brings the schema up to date. Several serverless instances can cold-start on
+ * the same database at once, and concurrent `CREATE TABLE IF NOT EXISTS` /
+ * `ADD COLUMN IF NOT EXISTS` race each other in Postgres, so the whole thing
+ * runs inside one advisory-locked transaction. Postgres does DDL
+ * transactionally, so a failure part-way leaves nothing half-built.
+ */
+async function bootstrapPostgres(): Promise<void> {
+  await pg!.begin(async (sql) => {
+    await sql.unsafe('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK]);
+    await sql.unsafe(postgresSchema());
+    for (const [table, column, ddl] of ADDITIONS) {
+      const postgresDdl = ddl
+        .replace(/\bREAL\b/g, 'DOUBLE PRECISION')
+        .replace(/datetime\('now'\)/g, pgNow);
+      await sql.unsafe(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${postgresDdl}`);
+    }
+    await sql.unsafe('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL');
+    await sql.unsafe('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google ON users(google_sub) WHERE google_sub IS NOT NULL');
+    await sql.unsafe("UPDATE groups SET season_started_at = created_at WHERE season_started_at = ''");
+    await sql.unsafe(
+      `INSERT INTO membership_grants (user_id, group_id, season_number, granted_at)
+       SELECT ms.user_id, ms.group_id, g.current_season, ms.joined_at
+         FROM memberships ms JOIN groups g ON g.id = ms.group_id
+       ON CONFLICT DO NOTHING`,
+    );
+    await sql.unsafe(`INSERT INTO seasons ${SEASON_BACKFILL} ON CONFLICT DO NOTHING`);
+  });
+}
+
 async function ensurePostgres(): Promise<void> {
   if (!pg) return;
-  if (!globalThis.__minimarketPgReady) {
-    globalThis.__minimarketPgReady = (async () => {
-      await pg.unsafe(postgresSchema());
-      for (const [table, column, ddl] of ADDITIONS) {
-        const postgresDdl = ddl
-          .replace(/\bREAL\b/g, 'DOUBLE PRECISION')
-          .replace(/datetime\('now'\)/g, pgNow);
-        await pg.unsafe(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${postgresDdl}`);
-      }
-      await pg.unsafe('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL');
-      await pg.unsafe('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google ON users(google_sub) WHERE google_sub IS NOT NULL');
-      await pg.unsafe("UPDATE groups SET season_started_at = created_at WHERE season_started_at = ''");
-      await pg.unsafe(
-        `INSERT INTO membership_grants (user_id, group_id, season_number, granted_at)
-         SELECT ms.user_id, ms.group_id, g.current_season, ms.joined_at
-           FROM memberships ms JOIN groups g ON g.id = ms.group_id
-         ON CONFLICT DO NOTHING`,
-      );
-      await pg.unsafe(`INSERT INTO seasons ${SEASON_BACKFILL} ON CONFLICT DO NOTHING`);
-    })();
+  const ready = globalThis.__minimarketPgReady ?? (globalThis.__minimarketPgReady = bootstrapPostgres());
+  try {
+    await ready;
+  } catch (error) {
+    // A rejected promise must never stay cached. A single connect timeout on a
+    // cold start would otherwise fail every later query on this instance —
+    // including every sign-in — until the process was recycled.
+    if (globalThis.__minimarketPgReady === ready) globalThis.__minimarketPgReady = undefined;
+    throw error;
   }
-  await globalThis.__minimarketPgReady;
 }
 
 type Row = Record<string, unknown>;

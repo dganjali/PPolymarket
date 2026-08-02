@@ -16,6 +16,7 @@ process.env.DATABASE_PATH = `data/test-${process.pid}-${Date.now()}.db`;
 
 const { all, db, get, run } = await import('../src/lib/db');
 const { authenticate, createUser, upsertGoogleUser } = await import('../src/lib/users');
+const { isUniqueViolation } = await import('../src/lib/errors');
 const {
   AppError,
   addMember,
@@ -90,6 +91,78 @@ try {
     name: 'Google User',
   });
   ok(google.email === 'google@example.com', 'Google sign-in creates an email-backed account');
+
+  // ── sign-in and account creation ───────────────────────────────────────────
+  ok((await authenticate('@admin', 'password'))?.id === admin.id, 'the @handle spelling the app displays signs in');
+  ok((await authenticate('  @ADMIN  ', 'password'))?.id === admin.id, 'sign-in tolerates padding and case on a handle');
+  ok((await authenticate('admin', 'wrong')) === null, 'a wrong password is refused');
+  ok((await authenticate('ghost', 'password')) === null, 'an unknown handle is refused');
+  ok((await authenticate('', '')) === null, 'an empty identifier is refused');
+  ok(
+    (await authenticate('google@example.com', '!google-only')) === null,
+    'the Google sentinel is not a usable password',
+  );
+
+  // A failed sign-in has to cost the same whether or not the account exists,
+  // or response time alone enumerates who has one.
+  const attempt = async (id: string) => {
+    const started = process.hrtime.bigint();
+    await authenticate(id, 'not-the-password');
+    return Number(process.hrtime.bigint() - started) / 1e6;
+  };
+  await attempt('admin');
+  const knownCost = await attempt('admin');
+  const unknownCost = await attempt('nobody-at-all');
+  ok(
+    unknownCost > knownCost / 4,
+    `signing in as an unknown account costs comparable time (${knownCost.toFixed(1)}ms vs ${unknownCost.toFixed(1)}ms)`,
+  );
+
+  await throws(() => createUser('admin', 'Impostor', 'password'), 'a taken handle is refused');
+  await throws(() => createUser('newbie', 'New', 'password', 'ADMIN@example.com'), 'a taken email is refused');
+  await throws(() => createUser('x', 'Too Short', 'password'), 'a one-character handle is refused');
+  await throws(() => createUser('shorty', 'Short', 'pass'), 'a short password is refused');
+  await throws(() => createUser('bademail', 'Bad', 'password', 'not-an-address'), 'a malformed email is refused');
+  await throws(
+    () => upsertGoogleUser({ sub: 's', email: 'x@y.com', emailVerified: false, name: 'X' }),
+    'Google sign-in requires a verified address',
+  );
+
+  // The driver's own constraint message must never reach the sign-up form.
+  const collision = await createUser('collide', 'Collide', 'password', 'collide@example.com');
+  const raced = await (async () => {
+    try {
+      await run(
+        'INSERT INTO users (handle, name, pass_hash, email) VALUES (?, ?, ?, ?)',
+        'collide',
+        'Racer',
+        'x:y',
+        'racer@example.com',
+      );
+      return null;
+    } catch (error) {
+      return error;
+    }
+  })();
+  ok(isUniqueViolation(raced), 'a lost uniqueness race is recognised as one');
+  ok(!isUniqueViolation(new Error('connection refused')), 'unrelated failures are not mistaken for one');
+
+  // Two accounts, same person, both signing in with Google: the second call
+  // must find the first rather than insert a duplicate.
+  const first = await upsertGoogleUser({ sub: 'dup-sub', email: 'dup@example.com', emailVerified: true, name: 'Dup' });
+  const second = await upsertGoogleUser({ sub: 'dup-sub', email: 'dup@example.com', emailVerified: true, name: 'Dup' });
+  ok(first.id === second.id, 'a repeat Google sign-in reuses the same account');
+  const linked = await upsertGoogleUser({
+    sub: 'link-sub',
+    email: 'collide@example.com',
+    emailVerified: true,
+    name: 'Collide',
+  });
+  ok(linked.id === collision.id, 'Google links to the existing account with that verified address');
+  ok(
+    (await authenticate('collide', 'password'))?.id === collision.id,
+    'linking Google leaves the existing password working',
+  );
 
   const group = await createGroup(admin.id, {
     name: 'Test Group',

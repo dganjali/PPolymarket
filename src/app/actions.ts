@@ -68,19 +68,13 @@ async function me() {
 // ─── auth ────────────────────────────────────────────────────────────────────
 
 export async function signupAction(_prev: FormState, fd: FormData): Promise<FormState> {
-  const handle = str(fd, 'handle');
-  const name = str(fd, 'name');
-  const email = str(fd, 'email');
-  const password = String(fd.get('password') ?? '');
   const next = safeNext(str(fd, 'next') || '/');
+  const res = await guard(() =>
+    createUser(str(fd, 'handle'), str(fd, 'name'), String(fd.get('password') ?? ''), str(fd, 'email')),
+  );
+  if ('error' in res) return res as FormState;
 
-  let userId: number;
-  try {
-    userId = (await createUser(handle, name, password, email)).id;
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Could not create that account.' };
-  }
-  await setSession(userId);
+  await setSession((res as { id: number }).id);
   redirect(next);
 }
 

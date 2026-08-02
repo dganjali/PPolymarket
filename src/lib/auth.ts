@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { userById, type User } from './users';
 
@@ -38,7 +39,12 @@ export async function clearSession() {
   (await cookies()).delete(COOKIE);
 }
 
-export async function currentUser(): Promise<User | null> {
+/**
+ * The signed-in user, or null. Wrapped in React's `cache` so the layout, the
+ * page and any server action in one request resolve the session with a single
+ * row lookup instead of one apiece.
+ */
+export const currentUser = cache(async (): Promise<User | null> => {
   const raw = (await cookies()).get(COOKIE)?.value;
   if (!raw) return null;
 
@@ -51,7 +57,9 @@ export async function currentUser(): Promise<User | null> {
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
 
   const [idStr, issued] = payload.split('.');
+  const id = Number(idStr);
+  if (!Number.isInteger(id) || id <= 0) return null;
   if (Date.now() - Number(issued) > MAX_AGE * 1000) return null;
 
-  return await userById(Number(idStr));
-}
+  return await userById(id);
+});
