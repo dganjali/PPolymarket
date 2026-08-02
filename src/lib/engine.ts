@@ -1111,18 +1111,21 @@ async function holdsPosition(userId: number, marketId: number): Promise<boolean>
 }
 
 /**
- * Nobody settles a market they have money on.
- *
- * Without this an admin can open a market, bet on it, and declare themselves
- * right — which is not a prediction, it is a withdrawal from the group's
- * liquidity. Selling out first is always available, and in a group with more
- * than one admin somebody uninvolved can simply do it instead.
+ * Admins in a small group want to play too, so holding a position does not bar
+ * you from calling a result. What it does is remove your ability to overrule
+ * anybody: the group is told you had money on it, and a single objection takes
+ * the decision out of your hands.
  */
-async function requireDisinterested(userId: number, marketId: number) {
-  if (await holdsPosition(userId, marketId)) {
+async function requireUncontested(userId: number, marketId: number) {
+  if (!(await holdsPosition(userId, marketId))) return;
+  const disputes = (await get<{ n: number }>(
+    'SELECT CAST(COUNT(*) AS INTEGER) AS n FROM market_disputes WHERE market_id = ?',
+    marketId,
+  ))!.n;
+  if (disputes > 0) {
     fail(
-      'You hold a position in this market, so you cannot be the one to settle it. ' +
-        'Sell out first, or ask another admin to call it.',
+      'You bet on this market and somebody has disputed the result, so you cannot be the one ' +
+        'to settle it. Another admin has to call it — or sell your position first.',
     );
   }
 }
@@ -1141,8 +1144,8 @@ export async function resolveMarket(userId: number, marketId: number, outcome: s
 export async function proposeResolution(userId: number, marketId: number, outcome: string, evidence: string) {
   const m = await marketById(marketId) ?? fail('Market not found.');
   await requireAdmin(userId, m.group_id);
-  await requireDisinterested(userId, marketId);
   if (!['open', 'closed', 'resolving'].includes(m.status)) fail('That market cannot be resolved.');
+  const interested = await holdsPosition(userId, marketId);
   const outcomeLabel =
     m.market_type === 'categorical'
       ? (await get<{ label: string }>('SELECT label FROM market_options WHERE id = ? AND market_id = ?', Number(outcome), marketId))?.label
@@ -1173,9 +1176,17 @@ export async function proposeResolution(userId: number, marketId: number, outcom
       marketId,
       userId,
       'resolution',
-      `proposed ${outcomeLabel} for “${m.question}” — ${hours}h review`,
+      `proposed ${outcomeLabel} for “${m.question}” — ${hours}h review` +
+        (interested ? ' · they have money on this one' : ''),
     );
-    await notifyMembers(m.group_id, userId, marketId, 'resolution', `Result proposed: “${m.question}” → ${outcomeLabel}.`);
+    await notifyMembers(
+      m.group_id,
+      userId,
+      marketId,
+      'resolution',
+      `Result proposed: “${m.question}” → ${outcomeLabel}.` +
+        (interested ? ' The admin who called it is betting on this market — check it.' : ''),
+    );
   });
 }
 
@@ -1213,8 +1224,8 @@ export async function disputeResolution(userId: number, marketId: number, reason
 export async function finalizeResolution(userId: number, marketId: number) {
   const m = await marketById(marketId) ?? fail('Market not found.');
   await requireAdmin(userId, m.group_id);
-  await requireDisinterested(userId, marketId);
   if (m.status !== 'resolving' || !m.proposed_outcome) fail('There is no proposed result to finalize.');
+  await requireUncontested(userId, marketId);
   const review = (await get<{ disputes: number; expired: number }>(
     `SELECT (SELECT CAST(COUNT(*) AS INTEGER) FROM market_disputes WHERE market_id = m.id) AS disputes,
             m.dispute_ends_at <= datetime('now') AS expired FROM markets m WHERE m.id = ?`,

@@ -11,7 +11,7 @@ export default async function DiscoverPage() {
   const groups = await publicGroups(user.id);
 
   return (
-    <main className="auth" style={{ gap: 22, paddingTop: 48 }}>
+    <main className="account">
       <div className="logo">M</div>
       <div>
         <div className="display" style={{ fontSize: 27 }}>
@@ -40,7 +40,7 @@ export default async function DiscoverPage() {
         }))}
       />
 
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Link href="/join" className="btn btn-ghost">
           Join with an invite code
         </Link>

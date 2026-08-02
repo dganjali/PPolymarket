@@ -1,6 +1,6 @@
 import { all, get } from './db';
-import { priceYes, type Reserves, type Side } from './amm';
-import { categoricalPrices, type CategoricalState } from './categorical';
+import { priceYes, quoteSell, type Reserves, type Side } from './amm';
+import { categoricalPrices, quoteCategoricalSell, type CategoricalState } from './categorical';
 import { parseStamp } from './format';
 
 export interface GroupRow {
@@ -306,6 +306,30 @@ export function reserves(m: Pick<MarketRow, 'yes_reserve' | 'no_reserve'>): Rese
   return { yes: m.yes_reserve, no: m.no_reserve };
 }
 
+/**
+ * What a holding is actually worth: what the pool would pay to take it back.
+ *
+ * Marking at the pool's marginal price instead books your own price impact as
+ * profit the instant you buy — a big enough bet could lift you up the table
+ * without anyone else trading, and selling handed it straight back.
+ */
+export function exitValue(pool: Reserves, side: Side, shares: number): number {
+  if (!(shares > 0.0001)) return 0;
+  return quoteSell(pool, side, shares).proceeds;
+}
+
+async function categoricalExitValue(
+  market: Pick<MarketRow, 'id' | 'lmsr_b'>,
+  optionId: number,
+  shares: number,
+): Promise<number> {
+  if (!(shares > 0.0001)) return 0;
+  const options = await marketOptions(market.id);
+  const index = options.findIndex((option) => option.id === optionId);
+  if (index < 0) return 0;
+  return quoteCategoricalSell(categoricalState(market, options), index, shares).proceeds;
+}
+
 export interface PriceHistoryPoint {
   price: number;
   created_at: string;
@@ -378,10 +402,16 @@ export async function openLegs(userId: number, groupId: number): Promise<OpenPos
   for (const m of rows) {
     const py = priceYes(reserves(m));
     if (m.yes_shares > 0.0001) {
-      legs.push({ market: m, side: 'YES', shares: m.yes_shares, cost: m.yes_cost, price: py, value: m.yes_shares * py });
+      legs.push({
+        market: m, side: 'YES', shares: m.yes_shares, cost: m.yes_cost, price: py,
+        value: exitValue(reserves(m), 'YES', m.yes_shares),
+      });
     }
     if (m.no_shares > 0.0001) {
-      legs.push({ market: m, side: 'NO', shares: m.no_shares, cost: m.no_cost, price: 1 - py, value: m.no_shares * (1 - py) });
+      legs.push({
+        market: m, side: 'NO', shares: m.no_shares, cost: m.no_cost, price: 1 - py,
+        value: exitValue(reserves(m), 'NO', m.no_shares),
+      });
     }
   }
 
@@ -410,7 +440,7 @@ export async function openLegs(userId: number, groupId: number): Promise<OpenPos
       shares: row.shares,
       cost: row.cost,
       price,
-      value: row.shares * price,
+      value: await categoricalExitValue(row, row.option_id, row.shares),
     });
   }
   return legs.sort((a, b) => b.value - a.value);
@@ -459,8 +489,8 @@ export async function standings(groupId: number, startingBalance: number): Promi
   const invested = new Map<number, number>();
   const openCount = new Map<number, number>();
   for (const p of live) {
-    const py = priceYes({ yes: p.yes_reserve, no: p.no_reserve });
-    const v = p.yes_shares * py + p.no_shares * (1 - py);
+    const pool = { yes: p.yes_reserve, no: p.no_reserve };
+    const v = exitValue(pool, 'YES', p.yes_shares) + exitValue(pool, 'NO', p.no_shares);
     if (v <= 0.0001) continue;
     invested.set(p.user_id, (invested.get(p.user_id) ?? 0) + v);
     openCount.set(p.user_id, (openCount.get(p.user_id) ?? 0) + 1);
@@ -478,8 +508,11 @@ export async function standings(groupId: number, startingBalance: number): Promi
   for (const position of categoricalLive) {
     const prices = categoricalMarkets.get(position.market_id) ?? await optionsWithPrices({ id: position.market_id, lmsr_b: position.lmsr_b });
     categoricalMarkets.set(position.market_id, prices);
-    const price = prices.find((option) => option.id === position.option_id)?.price ?? 0;
-    const value = position.shares * price;
+    const value = await categoricalExitValue(
+      { id: position.market_id, lmsr_b: position.lmsr_b },
+      position.option_id,
+      position.shares,
+    );
     invested.set(position.user_id, (invested.get(position.user_id) ?? 0) + value);
     openCount.set(position.user_id, (openCount.get(position.user_id) ?? 0) + 1);
   }

@@ -1,21 +1,15 @@
 import Link from 'next/link';
 import { groupContext } from '@/lib/context';
-import {
-  CATEGORIES,
-  events,
-  groupPrizes,
-  groupStats,
-  marketsByGroup,
-  membershipRequests,
-  priceSeriesFor,
-  standings,
-} from '@/lib/data';
-import { money0, relative, signedMoney, volLabel } from '@/lib/format';
+import { CATEGORIES, events, groupPrizes, marketsByGroup, membershipRequests, priceSeriesFor, standings } from '@/lib/data';
+import { money0, relative, signedMoney } from '@/lib/format';
 import { MarketCard } from '@/components/MarketCard';
-import { Podium, StandingsPanel, StatTile } from '@/components/Dashboard';
 import { Avatar } from '@/components/ui';
 
-export default async function DashboardPage({
+/**
+ * Where you stand, then what there is to bet on. Everything else — the full
+ * table, past seasons, your record — lives one tap away rather than here.
+ */
+export default async function HomePage({
   params,
   searchParams,
 }: {
@@ -27,12 +21,11 @@ export default async function DashboardPage({
   const { user, group, ms, isAdmin, base } = await groupContext(slug);
 
   const statuses = show === 'resolved' ? ['resolved'] : ['open', 'closed', 'resolving'];
-  const [all, rows, stats, prizes, feed] = await Promise.all([
+  const [all, rows, prizes, feed] = await Promise.all([
     marketsByGroup(group.id, statuses),
     standings(group.id, group.starting_balance),
-    groupStats(group.id, group.current_season),
     groupPrizes(group.id),
-    events(group.id, 8),
+    events(group.id, 5),
   ]);
   const joinRequests = isAdmin ? await membershipRequests(group.id) : [];
 
@@ -41,181 +34,111 @@ export default async function DashboardPage({
   const catList = ['All', ...CATEGORIES.filter((c) => all.some((m) => m.category === c))];
 
   const rank = rows.findIndex((r) => r.userId === user.id) + 1;
-  const mine = rows[rank - 1];
-  const total = mine?.total ?? ms.balance;
+  const total = rows[rank - 1]?.total ?? ms.balance;
   const pnl = total - group.starting_balance;
-  const daysLeft = group.season_ends
-    ? Math.max(0, Math.ceil((Date.parse(group.season_ends) - Date.now()) / 86_400_000))
-    : null;
-  const lastPlace = rows.length > 1 ? rows[rows.length - 1] : undefined;
+  const leader = rows[0];
+  const topPrize = prizes[0];
 
   return (
-    <div className="wrap dash">
-      {/* Admins land here, so anything waiting on them belongs at the top. */}
+    <div className="wrap stack" style={{ maxWidth: 1100 }}>
       {joinRequests.length > 0 && (
-        <Link
-          href={`${base}/admin`}
-          className="card"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 11,
-            padding: '12px 14px',
-            background: 'var(--gold-bg)',
-            borderColor: 'var(--gold-line)',
-          }}
-        >
-          <div style={{ display: 'flex', marginRight: 2 }}>
-            {joinRequests.slice(0, 3).map((request, index) => (
-              <div key={request.user_id} style={{ marginLeft: index ? -8 : 0 }}>
-                <Avatar name={request.name} src={request.avatar} size={26} radius={8} />
+        <Link href={`${base}/admin`} className="surface" style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)', background: 'var(--accent-bg)', borderColor: 'var(--accent-line)' }}>
+          <div style={{ display: 'flex' }}>
+            {joinRequests.slice(0, 3).map((r, i) => (
+              <div key={r.user_id} style={{ marginLeft: i ? -8 : 0 }}>
+                <Avatar name={r.name} src={r.avatar} size={24} radius={8} />
               </div>
             ))}
           </div>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600 }}>
-            {joinRequests.length} {joinRequests.length === 1 ? 'person is' : 'people are'} waiting to
-            join
-          </div>
-          <span className="btn btn-primary btn-sm">Review</span>
+          <span className="row-main" style={{ fontSize: 'var(--t-small)', fontWeight: 600 }}>
+            {joinRequests.length} waiting to join
+          </span>
+          <span className="t-micro" style={{ color: 'var(--accent)' }}>Let them in →</span>
         </Link>
       )}
 
-      <section className="dash-stats">
-        <StatTile
-          label="Your total"
-          value={money0(total)}
-          hint={`${signedMoney(pnl)} this season`}
-          tone={pnl >= 0 ? 'up' : 'down'}
-        />
-        <StatTile label="Your rank" value={rank ? `#${rank}` : '—'} hint={`of ${rows.length}`} tone="gold" />
-        <StatTile label="Cash free" value={money0(ms.balance)} hint={`${money0(mine?.invested ?? 0)} in play`} />
-        <StatTile
-          label="Season"
-          value={daysLeft === null ? `S${group.current_season}` : `${daysLeft}d`}
-          hint={daysLeft === null ? 'no end date' : 'left to play'}
-        />
-      </section>
-
-      <Podium
-        entries={prizes.map((prize) => {
-          const holder = rows[prize.place - 1];
-          return {
-            place: prize.place,
-            label: prize.label,
-            holder: holder && { name: holder.name, avatar: holder.avatar, total: holder.total },
-          };
-        })}
-        punishment={group.punishment}
-        lastPlace={lastPlace && { name: lastPlace.name, avatar: lastPlace.avatar, total: lastPlace.total }}
-      />
-
-      <div className="dash-split">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-          <section style={{ display: 'flex', alignItems: 'center', gap: 7, overflowX: 'auto', paddingBottom: 2 }}>
-            {catList.map((c) => (
-              <Link
-                key={c}
-                href={c === 'All' ? `${base}?show=${show}` : `${base}?cat=${encodeURIComponent(c)}&show=${show}`}
-                className="chip"
-                data-on={cat === c}
-              >
-                {c}
-              </Link>
-            ))}
-            <div style={{ flex: 1, minWidth: 8 }} />
-            <Link href={base} className="chip" data-on={show !== 'resolved'}>
-              Live
-            </Link>
-            <Link href={`${base}?show=resolved`} className="chip" data-on={show === 'resolved'}>
-              Settled
-            </Link>
-          </section>
-
-          <section className="market-grid" style={{ display: 'grid', gap: 10 }}>
-            {markets.map((m) => (
-              <MarketCard key={m.id} market={m} series={series.get(m.id) ?? []} base={base} />
-            ))}
-          </section>
-
-          {markets.length === 0 && (
-            <div className="empty">
-              {show === 'resolved'
-                ? 'Nothing has settled yet.'
-                : cat === 'All'
-                  ? 'No markets yet. Be the first to put a question up.'
-                  : `Nothing open in ${cat}.`}
-              <div style={{ marginTop: 14 }}>
-                <Link href={`${base}/new`} className="btn btn-primary btn-sm">
-                  New market
-                </Link>
-              </div>
-            </div>
-          )}
+      {/* One line about you, one about who is winning. That is the whole summary. */}
+      <section className="surface" style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--s-4)', alignItems: 'center' }}>
+        <div>
+          <div className="t-micro">You&rsquo;re worth</div>
+          <div className="mono" style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 3 }}>
+            {money0(total)}
+          </div>
+          <div className="mono t-micro" style={{ color: pnl >= 0 ? 'var(--yes-hi)' : 'var(--no-hi)', marginTop: 2 }}>
+            {signedMoney(pnl)} · {rank ? `${rank} of ${rows.length}` : 'unranked'}
+          </div>
         </div>
 
-        <aside className="dash-side">
-          <StandingsPanel
-            rows={rows.slice(0, 6).map((r) => ({
-              userId: r.userId,
-              name: r.name,
-              avatar: r.avatar,
-              total: r.total,
-              pnl: r.pnl,
-            }))}
-            meId={user.id}
-            href={`${base}/leaderboard`}
-          />
-
-          <section className="card" style={{ padding: 13 }}>
-            <div className="panel-head">
-              <div className="eyebrow" style={{ padding: 0 }}>This season</div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
-              <Cell label="Volume" value={volLabel(stats.volume).replace(' Vol', '')} />
-              <Cell label="At stake" value={money0(stats.atStake)} />
-              <Cell label="Live" value={String(stats.live)} />
-              <Cell label="Settled" value={String(stats.resolved)} />
-              <Cell label="Trades" value={String(stats.trades)} />
-              <Cell label="Members" value={String(rows.length)} />
-            </div>
-          </section>
-
-          <section className="card" style={{ padding: 13 }}>
-            <div className="panel-head">
-              <div className="eyebrow" style={{ padding: 0 }}>Activity</div>
-              <Link href={`${base}/activity`} className="mono" style={{ fontSize: 10, color: 'var(--gold)' }}>
-                ALL
-              </Link>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-              {feed.map((e) => (
-                <div key={e.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
-                  <Avatar name={e.user_name ?? 'Minimarket'} src={e.user_avatar} size={22} radius={7} />
-                  <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.45, color: 'var(--ink-4)' }}>
-                    <span style={{ color: 'var(--ink-2)' }}>{e.user_name ?? 'Minimarket'}</span>{' '}
-                    {e.body.length > 90 ? `${e.body.slice(0, 90)}…` : e.body}
-                  </div>
-                  <div className="mono" style={{ fontSize: 9, color: 'var(--dim-2)', flex: 'none' }}>
-                    {relative(e.created_at)}
-                  </div>
+        {leader && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)', minWidth: 0 }}>
+            <Avatar name={leader.name} src={leader.avatar} size={34} radius={11} />
+            <div style={{ minWidth: 0 }}>
+              <div className="t-micro">Winning</div>
+              <div className="row-name">{leader.name}</div>
+              {topPrize && (
+                <div className="t-micro" style={{ marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>
+                  takes {topPrize.label.toLowerCase()}
                 </div>
-              ))}
-              {feed.length === 0 && (
-                <div className="mono" style={{ fontSize: 11, color: 'var(--dim-2)' }}>Nothing yet.</div>
               )}
             </div>
-          </section>
-        </aside>
-      </div>
-    </div>
-  );
-}
+          </div>
+        )}
 
-function Cell({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="stat-label">{label}</div>
-      <div className="mono" style={{ fontSize: 13.5, fontWeight: 600 }}>{value}</div>
+        <Link href={`${base}/standings`} className="t-micro" style={{ marginLeft: 'auto', color: 'var(--accent)' }}>
+          Full table →
+        </Link>
+      </section>
+
+      <section style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-1)', overflowX: 'auto', paddingBottom: 2 }}>
+        {catList.map((c) => (
+          <Link
+            key={c}
+            href={c === 'All' ? `${base}?show=${show}` : `${base}?cat=${encodeURIComponent(c)}&show=${show}`}
+            className="chip"
+            data-on={cat === c}
+          >
+            {c}
+          </Link>
+        ))}
+        <div style={{ flex: 1, minWidth: 8 }} />
+        <Link href={base} className="chip" data-on={show !== 'resolved'}>Open</Link>
+        <Link href={`${base}?show=resolved`} className="chip" data-on={show === 'resolved'}>Done</Link>
+      </section>
+
+      <section className="market-grid" style={{ display: 'grid', gap: 'var(--s-2)' }}>
+        {markets.map((m) => (
+          <MarketCard key={m.id} market={m} series={series.get(m.id) ?? []} base={base} />
+        ))}
+      </section>
+
+      {markets.length === 0 && (
+        <div className="empty">
+          {show === 'resolved' ? 'Nothing has finished yet.' : 'Nothing to bet on yet.'}
+          <div style={{ marginTop: 'var(--s-2)' }}>
+            <Link href={`${base}/new`} className="btn btn-primary btn-sm">Ask a question</Link>
+          </div>
+        </div>
+      )}
+
+      <section>
+        <div className="sec">
+          <h2 className="h-head">Lately</h2>
+          <Link href={`${base}/activity`}>Everything →</Link>
+        </div>
+        <div className="surface" style={{ padding: 'var(--s-2)' }}>
+          {feed.map((e) => (
+            <div key={e.id} className="row" style={{ padding: '7px var(--s-1)' }}>
+              <Avatar name={e.user_name ?? 'Minimarket'} src={e.user_avatar} size={22} radius={7} />
+              <span className="row-main t-small" style={{ color: 'var(--ink-4)' }}>
+                <span style={{ color: 'var(--ink-2)' }}>{e.user_name ?? 'Minimarket'}</span>{' '}
+                {e.body.length > 80 ? `${e.body.slice(0, 80)}…` : e.body}
+              </span>
+              <span className="t-micro">{relative(e.created_at)}</span>
+            </div>
+          ))}
+          {feed.length === 0 && <p className="t-small" style={{ margin: 0, padding: 'var(--s-2)' }}>Nothing yet.</p>}
+        </div>
+      </section>
     </div>
   );
 }

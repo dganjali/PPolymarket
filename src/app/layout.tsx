@@ -4,7 +4,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Minimarket — private prediction markets',
   description:
-    'Play-money prediction markets for invite-only groups. Real AMM pricing, no money at stake beyond whatever your admin puts up.',
+    'Play-money prediction markets for invite-only groups. Real market pricing, nothing at stake beyond whatever your admin puts up.',
 };
 
 export const viewport: Viewport = {

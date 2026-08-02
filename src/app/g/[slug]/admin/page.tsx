@@ -53,7 +53,7 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
   }));
 
   return (
-    <div className="wrap narrow" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className="wrap stack" style={{ maxWidth: 820 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <h1 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.02em', margin: 0 }}>Admin</h1>
         <span
@@ -73,15 +73,13 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         </span>
       </div>
 
-      <PrizeEditor slug={slug} prizes={prizes.map((p) => p.label)} />
-
-      <StakesEditor slug={slug} punishment={group.punishment} />
-
       <MembershipRequests slug={slug} requests={joinRequests} />
+
+      <h2 className="h-head" style={{ marginTop: 'var(--s-2)' }}>Questions</h2>
 
       <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div className="eyebrow">Pending markets</div>
+          <div className="eyebrow">Waiting for you</div>
           <div className="mono" style={{ fontSize: 10, color: 'var(--gold)' }}>
             {pending.length} waiting
           </div>
@@ -110,14 +108,14 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
       </div>
 
       <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div className="eyebrow">Resolve markets</div>
+        <div className="eyebrow">Settle questions</div>
         {resolvableRows.map(({ market: m, disputes, canFinalize, options }) => (
           <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
             <Link href={`${base}/m/${m.id}`} style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35 }}>
               {m.question}
             </Link>
             <div className="mono" style={{ fontSize: 10, color: 'var(--dim)' }}>
-              {volLabel(m.volume)} · {money0(m.collateral)} at stake ·{' '}
+              {volLabel(m.volume)} · {money0(m.collateral)} in the pot ·{' '}
               {m.status === 'closed' ? 'closed' : `closes ${relative(m.closes_at)}`}
             </div>
             <AdminMarketControls
@@ -147,6 +145,8 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         </div>
       </div>
 
+      <h2 className="h-head" style={{ marginTop: 'var(--s-2)' }}>People</h2>
+
       <InviteManager
         slug={slug}
         code={group.invite_code}
@@ -163,7 +163,29 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         }))}
       />
 
+      <MemberList
+        slug={slug}
+        ownerId={group.owner_id}
+        canManageRoles={user.id === group.owner_id}
+        members={members.map((m) => ({
+          userId: m.userId,
+          name: m.name,
+          handle: m.handle,
+          role: m.role,
+          total: m.total,
+          openPositions: m.openPositions,
+        }))}
+      />
+
+      <h2 className="h-head" style={{ marginTop: 'var(--s-2)' }}>The season</h2>
+
+      <PrizeEditor slug={slug} prizes={prizes.map((p) => p.label)} />
+
+      <StakesEditor slug={slug} punishment={group.punishment} />
+
       <AnnouncementForm slug={slug} />
+
+      <h2 className="h-head" style={{ marginTop: 'var(--s-2)' }}>Settings</h2>
 
       <SettingsForm
         slug={slug}
@@ -194,19 +216,6 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         />
       )}
 
-      <MemberList
-        slug={slug}
-        ownerId={group.owner_id}
-        canManageRoles={user.id === group.owner_id}
-        members={members.map((m) => ({
-          userId: m.userId,
-          name: m.name,
-          handle: m.handle,
-          role: m.role,
-          total: m.total,
-          openPositions: m.openPositions,
-        }))}
-      />
     </div>
   );
 }

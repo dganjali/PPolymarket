@@ -73,7 +73,6 @@ export function ProfileForm({
   return (
     <form action={formAction} className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
       <input type="hidden" name="avatar" value={preview ?? ''} />
-      <div className="eyebrow">Your profile</div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <Avatar name={name} src={preview} size={72} radius={20} />

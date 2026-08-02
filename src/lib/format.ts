@@ -18,8 +18,9 @@ export const signedCents = (delta: number) => {
   return `${c >= 0 ? '+' : '−'}${Math.abs(c).toFixed(1)}¢`;
 };
 
+/** How much has been bet through a question, in words rather than trading desk shorthand. */
 export const volLabel = (v: number) =>
-  v >= 1000 ? `$${(v / 1000).toFixed(1)}k Vol` : `$${Math.round(v)} Vol`;
+  v >= 1000 ? `$${(v / 1000).toFixed(1)}k bet` : `$${Math.round(v)} bet`;
 
 export const initials = (name: string) =>
   name

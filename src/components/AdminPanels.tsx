@@ -235,7 +235,7 @@ export function SettingsForm({
       </div>
 
       <div className="field">
-        <label htmlFor="marketLiquidity">House liquidity per market</label>
+        <label htmlFor="marketLiquidity">Starting pot per question</label>
         <input
           id="marketLiquidity"
           name="marketLiquidity"

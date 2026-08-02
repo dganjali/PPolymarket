@@ -72,7 +72,7 @@ export function NewMarketForm({
       </div>
 
       <div className="field">
-        <label>Market type</label>
+        <label>Kind of question</label>
         <div style={{ display: 'flex', gap: 7 }}>
           <button
             type="button"
@@ -153,7 +153,7 @@ export function NewMarketForm({
       </div>
 
       <div className="field">
-        <label htmlFor="rules">Resolution rules</label>
+        <label htmlFor="rules">How it gets settled</label>
         <textarea
           id="rules"
           name="rules"
@@ -169,32 +169,39 @@ export function NewMarketForm({
 
       {members.length > 0 && (
         <div className="field">
-          <label>Conflict controls</label>
-          <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
-            <div style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-4)' }}>
-              Block candidates or anyone directly connected to the outcome from trading this entire market.
+          <label>Who cannot bet on this</label>
+          <div className="surface" style={{ padding: 0, overflow: 'hidden' }}>
+            <p className="t-small" style={{ margin: 0, padding: 'var(--s-2) var(--s-3)', borderBottom: '1px solid var(--line)' }}>
+              If someone is part of the answer — they are one of the candidates, or they decide it —
+              tick them and they cannot bet on this question at all.
+            </p>
+            <div style={{ maxHeight: 210, overflowY: 'auto' }}>
+              {members.map((member) => (
+                <label
+                  key={member.userId}
+                  className="row"
+                  style={{ cursor: 'pointer', borderRadius: 0, margin: 0 }}
+                >
+                  <input
+                    type="checkbox"
+                    name="excludedUserId"
+                    value={member.userId}
+                    style={{ width: 17, height: 17, flex: 'none', accentColor: 'var(--accent)' }}
+                  />
+                  <span className="row-main" style={{ fontSize: 'var(--t-small)' }}>{member.name}</span>
+                  <span className="t-micro">@{member.handle}</span>
+                </label>
+              ))}
             </div>
-            {members.map((member) => (
-              <label
-                key={member.userId}
-                style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', color: 'var(--ink-3)' }}
-              >
-                <input type="checkbox" name="excludedUserId" value={member.userId} />
-                <span style={{ fontSize: 13 }}>{member.name}</span>
-                <span className="mono" style={{ fontSize: 10, color: 'var(--dim)' }}>
-                  @{member.handle}
-                </span>
-              </label>
-            ))}
-            <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.5 }}>
-              Restrictions are public and cannot be bypassed by choosing a different outcome.
-            </div>
+            <p className="t-micro" style={{ margin: 0, padding: 'var(--s-2) var(--s-3)', borderTop: '1px solid var(--line)', lineHeight: 1.5 }}>
+              Everyone can see who is blocked, and it covers every outcome.
+            </p>
           </div>
         </div>
       )}
 
       {marketType === 'binary' && <div className="field">
-        <label htmlFor="openPrice">Your opening odds</label>
+        <label htmlFor="openPrice">Where do you think it starts?</label>
         <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <div className="mono" style={{ fontSize: 30, fontWeight: 600 }}>
@@ -215,7 +222,7 @@ export function NewMarketForm({
       </div>}
 
       <div className="field">
-        <label htmlFor="funding">Your stake in the pool — comes out of your cash</label>
+        <label htmlFor="funding">What you put in — comes out of your cash</label>
         <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', gap: 7 }}>
             {[10, 25, 50, 100].map((v) => (
@@ -236,10 +243,11 @@ export function NewMarketForm({
           </div>
           <input type="hidden" name="funding" value={funding} />
           <div className="mono" style={{ fontSize: 10.5, color: 'var(--dim)', lineHeight: 1.55 }}>
-            The group underwrites {money0(houseLiquidity)} of pool on top of your stake, so the
-            market opens deep enough to trade. Your stake comes back at resolution with its share of
-            the fees, minus whatever the pool loses to traders who called it right. You have{' '}
-            {money0(balance)}.
+            The group already puts in {money0(houseLiquidity)}, which is what makes the question
+            tradeable at all — you do not have to add anything. Whatever you do add rides along with
+            it: you take that share of the 1.5% every trade pays, and that share of what the pool
+            wins or loses. More in means a bigger cut and a bigger risk, nothing else. It comes back
+            when the question settles. You have {money0(balance)} spare.
           </div>
         </div>
       </div>

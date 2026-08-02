@@ -12,7 +12,7 @@ export default async function ProfilePage() {
   const groups = await myGroups(user.id);
 
   return (
-    <main className="auth" style={{ gap: 22, paddingTop: 48 }}>
+    <main className="account">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <Link href="/groups" className="btn btn-ghost btn-sm">←</Link>
         <div className="display" style={{ fontSize: 25 }}>Profile</div>
@@ -37,7 +37,7 @@ export default async function ProfilePage() {
         {groups.length === 0 && <div className="empty">You are not in a group yet.</div>}
       </section>
 
-      <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.6, marginTop: 'auto' }}>
+      <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.6 }}>
         Your picture and name show up wherever you appear — standings, markets, activity — in every
         group you are in.
       </div>

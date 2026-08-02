@@ -41,7 +41,7 @@ export default async function JoinPage({
           to a market.
         </div>
         <div className="lede" style={{ marginTop: 10 }}>
-          Everyone starts with the same fake bankroll — the only thing at stake is whatever your admin
+          Everyone starts with the same fake bankroll — the only thing really at stake is whatever your admin
           puts up.
         </div>
       </div>

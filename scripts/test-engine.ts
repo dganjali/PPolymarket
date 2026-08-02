@@ -58,6 +58,7 @@ const {
   marketOptions,
   optionsWithPrices,
   priceHistory,
+  standings,
   publicGroups,
   seasonArchive,
   seasonAwards,
@@ -617,50 +618,85 @@ try {
   ok(dash.volume > 0, 'the dashboard totals traded volume');
   ok(dash.resolved > 0, 'the dashboard counts settled markets');
 
-  // ── nobody settles a market they have money on ─────────────────────────────
-  // Without this an admin can open a market, back one side, and declare
-  // themselves right — a withdrawal from the group's liquidity, not a forecast.
-  const selfDealt = await createMarket(admin.id, group, {
-    question: 'Can an admin settle a market they are betting on?',
+  // ── betting must not move you up the table on its own ──────────────────────
+  // Marking a holding at the pool's marginal price books your own price impact
+  // as profit: a big enough bet lifted you up the standings with nobody else
+  // trading, and selling handed it straight back.
+  const markGroup = await createGroup(admin.id, {
+    name: 'Mark Group',
+    startingBalance: 5000,
+    marketLiquidity: 600,
+    seasonEnds: null,
+    prize: '',
+    punishment: '',
+    requireMemberApproval: false,
+  });
+  const markMarket = await createMarket(admin.id, markGroup, {
+    question: 'Does betting on this raise my standing by itself?',
     category: 'Other',
     rules: '',
     closesAt: at(7),
     openPrice: 0.5,
     funding: 25,
   });
-  const stake = await buy(admin.id, selfDealt.id, 'YES', 200);
-  await throws(
-    () => proposeResolution(admin.id, selfDealt.id, 'YES', 'Because I say so.'),
-    'an admin holding a position cannot propose its result',
+  const worth = async () => (await standings(markGroup.id, 5000))[0].total;
+  const beforeBet = await worth();
+  const bet = await buy(admin.id, markMarket.id, 'YES', 500);
+  const afterBet = await worth();
+  ok(afterBet < beforeBet, `betting does not raise your own standing (${beforeBet.toFixed(2)} -> ${afterBet.toFixed(2)})`);
+  ok(beforeBet - afterBet < 500 * 0.06, 'and it only costs about the fee, not the whole bet');
+  await sell(admin.id, markMarket.id, 'YES', bet.shares);
+  ok(Math.abs((await worth()) - afterBet) < 1, 'selling straight back is roughly a no-op');
+
+  // ── an admin who bets can still call it, until somebody objects ────────────
+  // A hard block is unworkable in a group where the admin plays too. Instead the
+  // group is told, and a single dispute takes the decision out of their hands.
+  const played = await createMarket(admin.id, group, {
+    question: 'Can an admin who bet still settle this one?',
+    category: 'Other',
+    rules: '',
+    closesAt: at(7),
+    openPrice: 0.5,
+    funding: 25,
+  });
+  await buy(admin.id, played.id, 'YES', 200);
+  await proposeResolution(admin.id, played.id, 'YES', 'Checked the official result.');
+  ok((await marketById(played.id))!.status === 'resolving', 'an admin holding a position can still propose');
+  ok(
+    (await all<{ body: string }>(
+      "SELECT body FROM events WHERE market_id = ? AND kind = 'resolution'",
+      played.id,
+    )).some((e) => e.body.includes('money on this one')),
+    'the group is told the admin who called it had a bet on it',
   );
 
-  // A second, uninvolved admin is always allowed to call it.
+  await run('UPDATE markets SET dispute_ends_at = ? WHERE id = ?', at(-1), played.id);
+  await finalizeResolution(admin.id, played.id);
+  ok((await marketById(played.id))!.status === 'resolved', 'an unopposed call still goes through');
+
+  // Now the same thing, but somebody objects.
+  const contested = await createMarket(admin.id, group, {
+    question: 'Does one objection stop an interested admin?',
+    category: 'Other',
+    rules: '',
+    closesAt: at(7),
+    openPrice: 0.5,
+    funding: 25,
+  });
+  await buy(admin.id, contested.id, 'YES', 200);
+  await proposeResolution(admin.id, contested.id, 'YES', 'I reckon so.');
+  await disputeResolution(a.id, contested.id, 'That is not what happened at all.');
+  await run('UPDATE markets SET dispute_ends_at = ? WHERE id = ?', at(-1), contested.id);
+  await throws(
+    () => finalizeResolution(admin.id, contested.id),
+    'a disputed result cannot be finalized by an admin who bet on it',
+  );
+
+  // Somebody uninvolved settles it instead.
   await setMemberRole(admin.id, group.id, b.id, 'admin');
-  await proposeResolution(b.id, selfDealt.id, 'YES', 'Checked the official result.');
-  await run('UPDATE markets SET dispute_ends_at = ? WHERE id = ?', at(-1), selfDealt.id);
-  await throws(
-    () => finalizeResolution(admin.id, selfDealt.id),
-    'an admin holding a position cannot finalize it either',
-  );
-  await finalizeResolution(b.id, selfDealt.id);
-  ok((await marketById(selfDealt.id))!.status === 'resolved', 'a disinterested admin can settle it');
+  await finalizeResolution(b.id, contested.id);
+  ok((await marketById(contested.id))!.status === 'resolved', 'an uninvolved admin can settle a disputed market');
   await setMemberRole(admin.id, group.id, b.id, 'member');
-
-  // Selling out is the other way through.
-  const sold = await createMarket(admin.id, group, {
-    question: 'Does closing the position unblock settlement?',
-    category: 'Other',
-    rules: '',
-    closesAt: at(7),
-    openPrice: 0.5,
-    funding: 25,
-  });
-  const held = await buy(admin.id, sold.id, 'YES', 200);
-  await throws(() => proposeResolution(admin.id, sold.id, 'YES', 'Still holding.'), 'holding still blocks it');
-  await sell(admin.id, sold.id, 'YES', held.shares);
-  await proposeResolution(admin.id, sold.id, 'YES', 'Position closed first.');
-  ok((await marketById(sold.id))!.status === 'resolving', 'selling out unblocks settlement');
-  void stake;
 
   console.log(`✓ ${checks} assertions passed`);
 } finally {

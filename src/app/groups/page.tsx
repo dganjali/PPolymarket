@@ -13,7 +13,7 @@ export default async function GroupsPage() {
   const [groups, unread] = await Promise.all([myGroups(user.id), unreadNotificationCount(user.id)]);
 
   return (
-    <main className="auth" style={{ gap: 24, paddingTop: 56 }}>
+    <main className="account">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Avatar name={user.name} src={user.avatar} size={38} radius={12} />
@@ -75,7 +75,7 @@ export default async function GroupsPage() {
         )}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 'auto' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Link href="/join" className="btn btn-primary">
           Join with an invite code
         </Link>

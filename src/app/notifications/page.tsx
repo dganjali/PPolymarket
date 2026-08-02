@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { markNotificationsReadAction } from '@/app/actions';
+import { revalidatePath } from 'next/cache';
+import { markNotificationsRead } from '@/lib/engine';
 import { currentUser } from '@/lib/auth';
 import { notifications, unreadNotificationCount } from '@/lib/data';
 import { relative } from '@/lib/format';
@@ -9,22 +10,24 @@ export default async function NotificationsPage() {
   const user = await currentUser();
   if (!user) redirect('/login?next=/notifications');
   const [items, unread] = await Promise.all([notifications(user.id), unreadNotificationCount(user.id)]);
+  // Opening this page is reading them; leaving the badge up afterwards just
+  // makes people click it again looking for something new.
+  if (unread > 0) {
+    await markNotificationsRead(user.id);
+    revalidatePath('/', 'layout');
+  }
 
   return (
-    <main className="auth" style={{ gap: 20, paddingTop: 40 }}>
+    <main className="account">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <Link href="/groups" className="btn btn-ghost btn-sm">←</Link>
         <div style={{ flex: 1 }}>
           <div className="display" style={{ fontSize: 25 }}>Notifications</div>
           <div className="mono" style={{ fontSize: 10, color: 'var(--dim)', marginTop: 3 }}>
-            {unread} unread
+            {unread ? `${unread} new` : 'all caught up'}
           </div>
         </div>
-        {unread > 0 && (
-          <form action={markNotificationsReadAction}>
-            <button className="btn btn-ghost btn-sm" type="submit">Mark all read</button>
-          </form>
-        )}
+
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

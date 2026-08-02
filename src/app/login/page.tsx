@@ -22,7 +22,7 @@ export default async function LoginPage({
         <div>
           <div className="display">Welcome back.</div>
           <div className="lede" style={{ marginTop: 8 }}>
-            Minimarket is play money. The only thing at stake is whatever your admin put up.
+            Play money. The only thing really at stake is whatever your admin put up.
           </div>
         </div>
       </div>

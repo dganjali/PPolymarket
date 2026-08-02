@@ -4,7 +4,7 @@ import { useActionState, useState } from 'react';
 import { leaveGroupAction, type FormState } from '@/app/actions';
 import { SubmitButton } from './ui';
 
-/** Two taps to leave, because open positions are forfeited on the way out. */
+/** Two taps to leave, because any bet still running is forfeited on the way out. */
 export function LeaveGroup({
   slug,
   groupName,

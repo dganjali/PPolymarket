@@ -46,25 +46,15 @@ export default async function GroupLayout({
     isAdmin ? membershipRequests(group.id).then((r) => r.length) : Promise.resolve(0),
   ]);
 
+  // Four destinations, not seven. Seasons folded into Standings, Profile into
+  // You, Activity onto Home, and Alerts is a badge in the header instead of a row.
   const navItems: NavItem[] = [
-    { href: base, label: 'Markets', exact: true },
-    { href: `${base}/portfolio`, label: 'Portfolio' },
-    { href: `${base}/leaderboard`, label: 'Leaderboard' },
-    { href: `${base}/seasons`, label: 'Seasons' },
-    { href: `${base}/activity`, label: 'Activity' },
-    { href: '/notifications', label: 'Alerts', badge: unread },
+    { href: base, label: 'Home', exact: true },
+    { href: `${base}/standings`, label: 'Standings' },
+    { href: `${base}/you`, label: 'You' },
     ...(isAdmin ? [{ href: `${base}/admin`, label: 'Admin', badge: waiting }] : []),
   ];
-
-  const tabItems: NavItem[] = [
-    { href: base, label: 'Markets', exact: true },
-    { href: `${base}/portfolio`, label: 'Portfolio' },
-    { href: `${base}/leaderboard`, label: 'Board' },
-    ...(isAdmin
-      ? [{ href: `${base}/admin`, label: 'Admin', badge: waiting }]
-      : [{ href: `${base}/activity`, label: 'Activity' }]),
-    { href: '/notifications', label: 'Alerts', badge: unread },
-  ];
+  const tabItems = navItems;
 
   const mine = rows.find((r) => r.userId === user.id);
   const total = mine?.total ?? ms.balance;
@@ -124,12 +114,35 @@ export default async function GroupLayout({
             {group.name}
           </div>
           <SidebarNav items={navItems} />
+          <Link href={`${base}/new`} className="btn btn-primary btn-sm new-market-cta" style={{ marginTop: 8, textAlign: 'center' }}>
+            Ask a question
+          </Link>
         </div>
 
         <div style={{ flex: 1 }} />
 
         <Link
-          href="/profile"
+          href="/notifications"
+          className="nav"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}
+        >
+          <span>Alerts</span>
+          {!!unread && (
+            <span
+              className="mono"
+              style={{
+                minWidth: 17, height: 17, padding: '0 5px', borderRadius: 99,
+                background: 'var(--accent)', color: '#fff', fontSize: 10, fontWeight: 700,
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {unread > 99 ? '99+' : unread}
+            </span>
+          )}
+        </Link>
+
+        <Link
+          href={`${base}/you`}
           style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 6px', borderRadius: 9 }}
         >
           <Avatar name={user.name} src={user.avatar} size={26} radius={8} />
