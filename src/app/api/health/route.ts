@@ -6,6 +6,36 @@ export const dynamic = 'force-dynamic';
 const scrub = (text: string) => text.replace(/[a-z]+:\/\/[^\s]*/gi, '<url>').slice(0, 300);
 
 /**
+ * Where the driver is actually pointed, password omitted.
+ *
+ * "password authentication failed for user X" is only actionable once you can
+ * see which user and host were used — through Supabase's pooler the username
+ * has to carry the project ref, and a password with unescaped punctuation
+ * silently mangles the whole userinfo section.
+ */
+function connectionTarget(raw: string | undefined) {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    const password = decodeURIComponent(url.password);
+    return {
+      host: url.hostname,
+      port: url.port || '5432',
+      user: decodeURIComponent(url.username),
+      database: url.pathname.replace(/^\//, '') || null,
+      passwordSet: password.length > 0,
+      passwordLength: password.length,
+      // The usual cause of a mangled connection string.
+      passwordNeedsEscaping: /[@:/?#[\]]/.test(password),
+      looksLikePooler: url.hostname.includes('pooler.supabase.com'),
+      userCarriesProjectRef: url.username.includes('.'),
+    };
+  } catch {
+    return { parseError: 'Could not be parsed as a URL. It must start with postgresql:// and have any special characters in the password percent-encoded.' };
+  }
+}
+
+/**
  * What this deployment is missing, in one request.
  *
  * Next hides server errors behind a digest in production, which leaves an
@@ -24,9 +54,32 @@ export async function GET() {
     APP_ORIGIN: !!process.env.APP_ORIGIN,
   };
 
+  const target = connectionTarget(process.env.POSTGRES_URL ?? process.env.DATABASE_URL);
+
   const problems: string[] = [];
   if (!configured.SESSION_SECRET && process.env.NODE_ENV === 'production') {
     problems.push('SESSION_SECRET is not set, so nobody can sign in. Generate one with: openssl rand -base64 32');
+  }
+  if (target && 'looksLikePooler' in target) {
+    if (target.looksLikePooler && !target.userCarriesProjectRef) {
+      problems.push(
+        `Supabase's pooler needs the project ref in the username. Change user "${target.user}" to ` +
+          `"${target.user}.<your-project-ref>" — the ref is the subdomain of your db.<ref>.supabase.co host.`,
+      );
+    }
+    if (!target.looksLikePooler) {
+      problems.push(
+        `Host "${target.host}" is the direct connection. On Vercel use the transaction pooler ` +
+          '(aws-0-<region>.pooler.supabase.com, port 6543) — direct connections are IPv6-only and unpooled.',
+      );
+    }
+    if (target.passwordNeedsEscaping) {
+      problems.push(
+        'The password contains characters that must be percent-encoded in a URL (@ : / ? # [ ]). ' +
+          'Encode them, or reset the database password to something alphanumeric.',
+      );
+    }
+    if (!target.passwordSet) problems.push('The connection string carries no password.');
   }
   if (!configured.POSTGRES_URL && !configured.DATABASE_URL && process.env.NODE_ENV === 'production') {
     problems.push(
@@ -60,6 +113,7 @@ export async function GET() {
       driver: configured.POSTGRES_URL || configured.DATABASE_URL ? 'postgres' : 'sqlite',
       environment: process.env.NODE_ENV ?? 'unknown',
       configured,
+      target,
       database,
       problems,
     },
