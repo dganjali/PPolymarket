@@ -36,6 +36,27 @@ CREATE TABLE IF NOT EXISTS groups (
   created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS group_prizes (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id   INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  place      INTEGER NOT NULL,
+  label      TEXT NOT NULL,
+  UNIQUE (group_id, place)
+);
+CREATE INDEX IF NOT EXISTS idx_group_prizes_group ON group_prizes(group_id, place);
+
+CREATE TABLE IF NOT EXISTS season_awards (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id      INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  season_number INTEGER NOT NULL,
+  place         INTEGER NOT NULL,
+  user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  label         TEXT NOT NULL,
+  final_total   REAL NOT NULL DEFAULT 0,
+  UNIQUE (group_id, season_number, place)
+);
+CREATE INDEX IF NOT EXISTS idx_season_awards ON season_awards(group_id, season_number, place);
+
 CREATE TABLE IF NOT EXISTS login_tokens (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   email       TEXT NOT NULL,
@@ -282,6 +303,7 @@ declare global {
 const ADDITIONS: [table: string, column: string, ddl: string][] = [
   ['users', 'email', 'TEXT'],
   ['users', 'google_sub', 'TEXT'],
+  ['users', 'avatar', 'TEXT'],
   ['groups', 'market_liquidity', 'REAL NOT NULL DEFAULT 500'],
   ['groups', 'require_member_approval', 'INTEGER NOT NULL DEFAULT 1'],
   ['groups', 'dispute_window_hours', 'INTEGER NOT NULL DEFAULT 24'],
@@ -315,6 +337,10 @@ const SEASON_BACKFILL = `(group_id, season_number, started_at, ended_at, entrant
            ORDER BY x.rank DESC LIMIT 1)
     FROM season_results r GROUP BY r.group_id, r.season_number`;
 
+/** The single free-text prize predates ranked places; it becomes first place. */
+const PRIZE_BACKFILL = `(group_id, place, label)
+  SELECT id, 1, prize FROM groups WHERE prize <> ''`;
+
 function migrate(db: DatabaseSync) {
   for (const [table, column, ddl] of ADDITIONS) {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -334,6 +360,7 @@ function migrate(db: DatabaseSync) {
            SELECT ms.user_id, ms.group_id, g.current_season, ms.joined_at
              FROM memberships ms JOIN groups g ON g.id = ms.group_id`);
   db.exec(`INSERT OR IGNORE INTO seasons ${SEASON_BACKFILL}`);
+  db.exec(`INSERT OR IGNORE INTO group_prizes ${PRIZE_BACKFILL}`);
 }
 
 function open(): DatabaseSync {
@@ -429,6 +456,7 @@ async function bootstrapPostgres(): Promise<void> {
        ON CONFLICT DO NOTHING`,
     );
     await sql.unsafe(`INSERT INTO seasons ${SEASON_BACKFILL} ON CONFLICT DO NOTHING`);
+    await sql.unsafe(`INSERT INTO group_prizes ${PRIZE_BACKFILL} ON CONFLICT DO NOTHING`);
   });
 }
 

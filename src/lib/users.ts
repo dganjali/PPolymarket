@@ -7,6 +7,7 @@ export interface User {
   handle: string;
   name: string;
   email: string | null;
+  avatar: string | null;
 }
 
 /**
@@ -105,7 +106,7 @@ async function provisionVerified(
   for (let attempt = 0; attempt < 3; attempt++) {
     const existing = googleSub
       ? await linkGoogleUser(googleSub, email)
-      : await get<User>('SELECT id, handle, name, email FROM users WHERE email = ?', email);
+      : await get<User>('SELECT id, handle, name, email, avatar FROM users WHERE email = ?', email);
     if (existing) return existing;
 
     const handle = await availableHandle(email.split('@')[0]);
@@ -119,7 +120,7 @@ async function provisionVerified(
         email,
         googleSub,
       );
-      return { id: Number(res.lastInsertRowid), handle, name, email };
+      return { id: Number(res.lastInsertRowid), handle, name, email, avatar: null };
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
     }
@@ -164,7 +165,7 @@ export async function createUser(handle: string, name: string, password: string,
         passHash,
         cleanEmail,
       );
-      return { id: Number(res.lastInsertRowid), handle: clean, name: display, email: cleanEmail };
+      return { id: Number(res.lastInsertRowid), handle: clean, name: display, email: cleanEmail, avatar: null };
     });
   } catch (error) {
     // Two signups can clear those checks in the same instant. The unique
@@ -179,7 +180,7 @@ export async function authenticate(identifier: string, password: string): Promis
   const { column, value } = identifierColumn(identifier);
   const row = value
     ? await get<User & { pass_hash: string }>(
-        `SELECT id, handle, name, email, pass_hash FROM users WHERE ${column} = ?`,
+        `SELECT id, handle, name, email, avatar, pass_hash FROM users WHERE ${column} = ?`,
         value,
       )
     : undefined;
@@ -191,20 +192,20 @@ export async function authenticate(identifier: string, password: string): Promis
   const matches = verifyPassword(password, passwordless ? DECOY_HASH : row!.pass_hash);
   if (!row || passwordless || !matches) return null;
 
-  return { id: row.id, handle: row.handle, name: row.name, email: row.email };
+  return { id: row.id, handle: row.handle, name: row.name, email: row.email, avatar: row.avatar };
 }
 
 /** An existing account for this Google identity, linking it by address if needed. */
 async function linkGoogleUser(sub: string, email: string): Promise<User | undefined> {
   const byGoogle = await get<User>(
-    'SELECT id, handle, name, email FROM users WHERE google_sub = ?',
+    'SELECT id, handle, name, email, avatar FROM users WHERE google_sub = ?',
     sub,
   );
   if (byGoogle) return byGoogle;
 
   // Google has told us it verified this address, so whoever signed up with it
   // is the same person.
-  const byEmail = await get<User>('SELECT id, handle, name, email FROM users WHERE email = ?', email);
+  const byEmail = await get<User>('SELECT id, handle, name, email, avatar FROM users WHERE email = ?', email);
   if (byEmail) {
     await run('UPDATE users SET google_sub = ? WHERE id = ? AND google_sub IS NULL', sub, byEmail.id);
     return byEmail;
@@ -226,6 +227,44 @@ export async function upsertGoogleUser(input: {
   return provisionVerified(email, input.name, GOOGLE_ONLY, input.sub);
 }
 
+/**
+ * Only raster formats. SVG is an image to a browser and a script host to an
+ * attacker, so it never gets stored — a group's avatars render in everyone
+ * else's page.
+ */
+const AVATAR_PATTERN = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/;
+
+/** Roughly 90 KB of base64, which a 256px square never approaches. */
+const AVATAR_MAX = 120_000;
+
+export async function updateProfile(
+  userId: number,
+  patch: { name?: string; avatar?: string | null },
+): Promise<User> {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (patch.name !== undefined) {
+    const name = patch.name.trim().slice(0, 60);
+    if (name.length < 1) throw new AppError('Give yourself a display name.');
+    fields.push('name = ?');
+    values.push(name);
+  }
+
+  if (patch.avatar !== undefined) {
+    const avatar = patch.avatar?.trim() || null;
+    if (avatar !== null) {
+      if (avatar.length > AVATAR_MAX) throw new AppError('That picture is too large — try a smaller one.');
+      if (!AVATAR_PATTERN.test(avatar)) throw new AppError('That is not a PNG, JPEG or WebP image.');
+    }
+    fields.push('avatar = ?');
+    values.push(avatar);
+  }
+
+  if (fields.length) await run(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, ...values, userId);
+  return (await userById(userId))!;
+}
+
 export async function userById(id: number): Promise<User | null> {
-  return await get<User>('SELECT id, handle, name, email FROM users WHERE id = ?', id) ?? null;
+  return await get<User>('SELECT id, handle, name, email, avatar FROM users WHERE id = ?', id) ?? null;
 }

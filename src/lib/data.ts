@@ -169,9 +169,71 @@ export async function userByIdentifier(identifier: string) {
   const value = identifier.trim();
   if (!value) return undefined;
   return get<{ id: number; name: string; handle: string; email: string | null }>(
-    'SELECT id, name, handle, email FROM users WHERE handle = ? OR email = ?',
+    'SELECT id, name, handle, email, avatar FROM users WHERE handle = ? OR email = ?',
     value.replace(/^@/, '').toLowerCase(),
     value.toLowerCase(),
+  );
+}
+
+export interface GroupStats {
+  volume: number;
+  live: number;
+  resolved: number;
+  trades: number;
+  atStake: number;
+}
+
+/** Headline numbers for the group dashboard, this season only. */
+export async function groupStats(groupId: number, season: number): Promise<GroupStats> {
+  const row = await get<GroupStats>(
+    `SELECT COALESCE(SUM(m.volume), 0) AS volume,
+            COALESCE(SUM(m.collateral), 0) AS "atStake",
+            CAST(COUNT(*) FILTER (WHERE m.status = 'open') AS INTEGER) AS live,
+            CAST(COUNT(*) FILTER (WHERE m.status = 'resolved') AS INTEGER) AS resolved,
+            (SELECT CAST(COUNT(*) AS INTEGER) FROM trades t JOIN markets x ON x.id = t.market_id
+              WHERE x.group_id = ? AND x.season_number = ?) AS trades
+       FROM markets m WHERE m.group_id = ? AND m.season_number = ?`,
+    groupId,
+    season,
+    groupId,
+    season,
+  );
+  return row ?? { volume: 0, live: 0, resolved: 0, trades: 0, atStake: 0 };
+}
+
+export interface PrizeRow {
+  id: number;
+  group_id: number;
+  place: number;
+  label: string;
+}
+
+/** What each finishing place is playing for, first place first. */
+export async function groupPrizes(groupId: number): Promise<PrizeRow[]> {
+  return all<PrizeRow>('SELECT * FROM group_prizes WHERE group_id = ? ORDER BY place', groupId);
+}
+
+export interface AwardRow {
+  place: number;
+  label: string;
+  user_id: number | null;
+  final_total: number;
+  season_number: number;
+  name: string | null;
+  handle: string | null;
+  avatar: string | null;
+}
+
+/** Who actually won what, once a season is closed. */
+export async function seasonAwards(groupId: number, seasonNumber?: number): Promise<AwardRow[]> {
+  const scoped = seasonNumber !== undefined;
+  return all<AwardRow>(
+    `SELECT a.place, a.label, a.user_id, a.final_total, a.season_number,
+            u.name, u.handle, u.avatar
+       FROM season_awards a LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.group_id = ?${scoped ? ' AND a.season_number = ?' : ''}
+      ORDER BY a.season_number DESC, a.place`,
+    ...(scoped ? [groupId, seasonNumber] : [groupId]),
   );
 }
 
@@ -359,6 +421,7 @@ export interface Standing {
   name: string;
   handle: string;
   role: string;
+  avatar: string | null;
   cash: number;
   invested: number;
   total: number;
@@ -369,8 +432,8 @@ export interface Standing {
 
 /** Portfolio value for every member: cash plus mark-to-market on open legs. */
 export async function standings(groupId: number, startingBalance: number): Promise<Standing[]> {
-  const members = await all<{ user_id: number; name: string; handle: string; role: string; balance: number }>(
-    `SELECT ms.user_id, ms.role, ms.balance, u.name, u.handle
+  const members = await all<{ user_id: number; name: string; handle: string; role: string; balance: number; avatar: string | null }>(
+    `SELECT ms.user_id, ms.role, ms.balance, u.name, u.handle, u.avatar
        FROM memberships ms JOIN users u ON u.id = ms.user_id
       WHERE ms.group_id = ?`,
     groupId,
@@ -430,6 +493,7 @@ export async function standings(groupId: number, startingBalance: number): Promi
         name: m.name,
         handle: m.handle,
         role: m.role,
+        avatar: m.avatar,
         cash: m.balance,
         invested: inv,
         total,
@@ -447,12 +511,13 @@ export interface EventRow {
   body: string;
   created_at: string;
   user_name: string | null;
+  user_avatar: string | null;
   market_id: number | null;
 }
 
 export async function events(groupId: number, limit = 40): Promise<EventRow[]> {
   return all<EventRow>(
-    `SELECT e.id, e.kind, e.body, e.created_at, e.market_id, u.name AS user_name
+    `SELECT e.id, e.kind, e.body, e.created_at, e.market_id, u.name AS user_name, u.avatar AS user_avatar
        FROM events e LEFT JOIN users u ON u.id = e.user_id
       WHERE e.group_id = ? ORDER BY e.id DESC LIMIT ?`,
     groupId,
@@ -463,13 +528,14 @@ export async function events(groupId: number, limit = 40): Promise<EventRow[]> {
 export interface HolderRow {
   name: string;
   handle: string;
+  avatar: string | null;
   shares: number;
 }
 
 export async function holders(marketId: number, side: Side, limit = 5): Promise<HolderRow[]> {
   const col = side === 'YES' ? 'yes_shares' : 'no_shares';
   return all<HolderRow>(
-    `SELECT u.name, u.handle, p.${col} AS shares FROM positions p JOIN users u ON u.id = p.user_id
+    `SELECT u.name, u.handle, u.avatar, p.${col} AS shares FROM positions p JOIN users u ON u.id = p.user_id
       WHERE p.market_id = ? AND p.${col} > 0.0001 ORDER BY p.${col} DESC LIMIT ?`,
     marketId,
     limit,
@@ -489,11 +555,12 @@ export interface CommentRow {
   created_at: string;
   name: string;
   handle: string;
+  avatar: string | null;
 }
 
 export async function optionHolders(optionId: number, limit = 5): Promise<HolderRow[]> {
   return all<HolderRow>(
-    `SELECT u.name, u.handle, p.shares FROM option_positions p JOIN users u ON u.id = p.user_id
+    `SELECT u.name, u.handle, u.avatar, p.shares FROM option_positions p JOIN users u ON u.id = p.user_id
       WHERE p.option_id = ? AND p.shares > 0.0001 ORDER BY p.shares DESC LIMIT ?`,
     optionId,
     limit,
@@ -554,11 +621,12 @@ export interface MembershipRequestRow {
   name: string;
   handle: string;
   email: string | null;
+  avatar: string | null;
 }
 
 export async function membershipRequests(groupId: number): Promise<MembershipRequestRow[]> {
   return all<MembershipRequestRow>(
-    `SELECT r.*, u.name, u.handle, u.email FROM membership_requests r
+    `SELECT r.*, u.name, u.handle, u.email, u.avatar FROM membership_requests r
        JOIN users u ON u.id = r.user_id WHERE r.group_id = ? ORDER BY r.id`,
     groupId,
   );
@@ -595,7 +663,7 @@ export async function disputeFor(userId: number, marketId: number): Promise<Disp
 
 export async function comments(marketId: number, limit = 50): Promise<CommentRow[]> {
   return all<CommentRow>(
-    `SELECT c.id, c.body, c.created_at, u.name, u.handle
+    `SELECT c.id, c.body, c.created_at, u.name, u.handle, u.avatar
        FROM comments c JOIN users u ON u.id = c.user_id
       WHERE c.market_id = ? ORDER BY c.id DESC LIMIT ?`,
     marketId,
@@ -653,12 +721,13 @@ export interface SeasonResultRow {
   user_id: number;
   name: string;
   handle: string;
+  avatar: string | null;
   created_at: string;
 }
 
 export async function seasonHistory(groupId: number): Promise<SeasonResultRow[]> {
   return all<SeasonResultRow>(
-    `SELECT r.*, u.name, u.handle FROM season_results r JOIN users u ON u.id = r.user_id
+    `SELECT r.*, u.name, u.handle, u.avatar FROM season_results r JOIN users u ON u.id = r.user_id
       WHERE r.group_id = ? ORDER BY r.season_number DESC, r.rank`,
     groupId,
   );
@@ -679,6 +748,7 @@ export interface SeasonRow {
   entrants: number;
   champion_name: string | null;
   champion_handle: string | null;
+  champion_avatar: string | null;
   runner_up_name: string | null;
   last_place_name: string | null;
   last_place_handle: string | null;
@@ -688,6 +758,7 @@ export interface SeasonRow {
 export async function seasonArchive(groupId: number): Promise<SeasonRow[]> {
   return all<SeasonRow>(
     `SELECT s.*, champ.name AS champion_name, champ.handle AS champion_handle,
+            champ.avatar AS champion_avatar,
             runner.name AS runner_up_name,
             last.name AS last_place_name, last.handle AS last_place_handle
        FROM seasons s

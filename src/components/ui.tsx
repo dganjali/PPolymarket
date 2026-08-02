@@ -4,12 +4,33 @@ import { useEffect, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import { initials } from '@/lib/format';
 
-export function Avatar({ name, size = 32, radius = 9 }: { name: string; size?: number; radius?: number }) {
+export function Avatar({
+  name,
+  src,
+  size = 32,
+  radius = 9,
+}: {
+  name: string;
+  /** A stored data URL, or null to fall back to initials. */
+  src?: string | null;
+  size?: number;
+  radius?: number;
+}) {
+  const box = { width: size, height: size, borderRadius: radius, flex: 'none' as const };
+  if (src) {
+    // eslint-disable-next-line @next/next/no-img-element -- a data URL has nothing for the image optimiser to fetch.
+    return (
+      <img
+        src={src}
+        alt={name}
+        width={size}
+        height={size}
+        style={{ ...box, objectFit: 'cover', display: 'block', background: 'var(--chip)' }}
+      />
+    );
+  }
   return (
-    <div
-      className="avatar"
-      style={{ width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.34) }}
-    >
+    <div className="avatar" style={{ ...box, fontSize: Math.round(size * 0.34) }}>
       {initials(name)}
     </div>
   );

@@ -16,9 +16,7 @@ export default async function GroupsPage() {
     <main className="auth" style={{ gap: 24, paddingTop: 56 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div className="logo" style={{ width: 34, height: 34, borderRadius: 10, fontSize: 17 }}>
-            M
-          </div>
+          <Avatar name={user.name} src={user.avatar} size={38} radius={12} />
           <div>
             <div style={{ fontSize: 16, fontWeight: 600 }}>{user.name}</div>
             <div className="mono" style={{ fontSize: 11, color: 'var(--ink-5)' }}>
@@ -27,6 +25,7 @@ export default async function GroupsPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 7 }}>
+          <Link href="/profile" className="btn btn-ghost btn-sm">Profile</Link>
           <Link href="/notifications" className="btn btn-ghost btn-sm">
             Alerts{unread ? ` · ${unread}` : ''}
           </Link>

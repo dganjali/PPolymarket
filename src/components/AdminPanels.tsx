@@ -12,6 +12,7 @@ import {
   revokeInviteAction,
   startNextSeasonAction,
   transferOwnershipAction,
+  updatePrizesAction,
   updateSettingsAction,
   updateStakesAction,
   type FormState,
@@ -19,86 +20,117 @@ import {
 import { money0, relative } from '@/lib/format';
 import { SubmitButton, Toast } from './ui';
 
-/** Prize / punishment editor — one textarea, two modes, like the design. */
-export function StakesEditor({
-  slug,
-  prize,
-  punishment,
-}: {
-  slug: string;
-  prize: string;
-  punishment: string;
-}) {
-  const [state, formAction] = useActionState(updateStakesAction, {} as FormState);
-  const [mode, setMode] = useState<'prize' | 'punishment'>('prize');
-  const [text, setText] = useState(prize);
+const PLACE_LABEL = ['', '1st place', '2nd place', '3rd place', '4th place', '5th place',
+  '6th place', '7th place', '8th place', '9th place', '10th place'];
 
-  const swap = (next: 'prize' | 'punishment') => {
-    setMode(next);
-    setText(next === 'prize' ? prize : punishment);
-  };
+/**
+ * The prize table. Places are positional, so dropping one promotes everything
+ * below it — there is never a season with a second place and no first.
+ */
+export function PrizeEditor({ slug, prizes }: { slug: string; prizes: string[] }) {
+  const [state, formAction] = useActionState(updatePrizesAction, {} as FormState);
+  const [rows, setRows] = useState<string[]>(prizes.length ? prizes : ['']);
+
+  const update = (index: number, value: string) =>
+    setRows((current) => current.map((row, i) => (i === index ? value : row)));
+
+  return (
+    <form action={formAction} className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 11 }}>
+      <input type="hidden" name="slug" value={slug} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="eyebrow">Prizes by place</div>
+        <div className="mono" style={{ fontSize: 10, color: 'var(--gold)' }}>
+          {rows.filter((r) => r.trim()).length} set
+        </div>
+      </div>
+
+      {rows.map((row, index) => (
+        <div key={index} style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+          <div
+            className="mono"
+            style={{
+              width: 34,
+              flex: 'none',
+              marginTop: 10,
+              fontSize: 11,
+              fontWeight: 600,
+              color: index === 0 ? 'var(--gold)' : 'var(--dim)',
+            }}
+          >
+            {PLACE_LABEL[index + 1]?.replace(' place', '') ?? `${index + 1}th`}
+          </div>
+          <textarea
+            name="prize"
+            rows={2}
+            value={row}
+            maxLength={300}
+            onChange={(e) => update(index, e.target.value)}
+            placeholder={
+              index === 0
+                ? 'The good parking spot for all of senior spring.'
+                : index === 1
+                  ? 'Second pick of the parking spots.'
+                  : 'Bragging rights.'
+            }
+            style={{ flex: 1, fontSize: 13.5 }}
+          />
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{ marginTop: 6 }}
+            onClick={() => setRows((current) => current.filter((_, i) => i !== index))}
+            aria-label={`Remove ${PLACE_LABEL[index + 1]}`}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={rows.length >= 10}
+          onClick={() => setRows((current) => [...current, ''])}
+        >
+          Add {PLACE_LABEL[rows.length + 1] ?? 'another place'}
+        </button>
+        <SubmitButton className="btn btn-primary btn-sm" pendingLabel="Saving…">
+          Save prizes
+        </SubmitButton>
+      </div>
+
+      <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.55 }}>
+        Whoever finishes in each place when the season closes wins that prize, and gets told so.
+      </div>
+
+      {state.error && <div className="error">{state.error}</div>}
+      <Toast message={state.ok} />
+    </form>
+  );
+}
+
+/** The last-place forfeit. Prizes by place live in PrizeEditor above. */
+export function StakesEditor({ slug, punishment }: { slug: string; punishment: string }) {
+  const [state, formAction] = useActionState(updateStakesAction, {} as FormState);
 
   return (
     <form action={formAction} className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <input type="hidden" name="slug" value={slug} />
-      <input type="hidden" name="mode" value={mode} />
-
-      <div className="eyebrow">Season stakes</div>
-
-      <div style={{ display: 'flex', gap: 7 }}>
-        <button
-          type="button"
-          onClick={() => swap('prize')}
-          style={{
-            flex: 1,
-            padding: 9,
-            borderRadius: 9,
-            fontSize: 12.5,
-            fontWeight: 600,
-            background: mode === 'prize' ? 'var(--gold-bg)' : '#211F1D',
-            border: `1px solid ${mode === 'prize' ? 'var(--gold-line)' : 'var(--line-3)'}`,
-            color: mode === 'prize' ? 'var(--gold)' : 'var(--ink-4)',
-          }}
-        >
-          Prize
-        </button>
-        <button
-          type="button"
-          onClick={() => swap('punishment')}
-          style={{
-            flex: 1,
-            padding: 9,
-            borderRadius: 9,
-            fontSize: 12.5,
-            fontWeight: 600,
-            background: mode === 'punishment' ? '#251A18' : '#211F1D',
-            border: `1px solid ${mode === 'punishment' ? '#3E2B27' : 'var(--line-3)'}`,
-            color: mode === 'punishment' ? 'var(--no-hi)' : 'var(--ink-4)',
-          }}
-        >
-          Punishment
-        </button>
-      </div>
-
+      <input type="hidden" name="mode" value="punishment" />
+      <div className="eyebrow" style={{ color: 'var(--no-hi)' }}>Last place</div>
       <textarea
         name="text"
         rows={2}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder={
-          mode === 'prize'
-            ? 'Winner gets the good parking spot for all of senior spring.'
-            : 'Last place does the announcements in a full mascot suit.'
-        }
+        defaultValue={punishment}
+        maxLength={300}
+        placeholder="Last place does the announcements in a full mascot suit."
         style={{ fontSize: 13.5 }}
       />
-
       {state.error && <div className="error">{state.error}</div>}
-
-      <SubmitButton className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-start' }} pendingLabel="Saving…">
-        Save for the group
+      <SubmitButton className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} pendingLabel="Saving…">
+        Save forfeit
       </SubmitButton>
-
       <Toast message={state.ok} />
     </form>
   );

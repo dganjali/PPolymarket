@@ -7,6 +7,7 @@
  */
 import { db, run } from '../src/lib/db';
 import { createUser } from '../src/lib/users';
+import { solidAvatar } from './avatar';
 import {
   announce,
   buy,
@@ -17,6 +18,7 @@ import {
   postComment,
   resolveMarket,
   sell,
+  setGroupPrizes,
   startNextSeason,
   updateGroup,
 } from '../src/lib/engine';
@@ -270,6 +272,21 @@ async function main() {
     await postComment(id('marcus'), drama.id, 'This price is generous and you all know it.');
     await postComment(id('elena'), drama.id, 'I was at the bonfire. I am not saying anything else.');
     await postComment(id('dawson'), drama.id, 'This market is defamation and I am leaving it open.');
+  }
+
+  // Ranked prizes, so the podium has something to show.
+  await setGroupPrizes(id('dawson'), group.id, [
+    'The good parking spot for all of senior spring + a $40 Chipotle card.',
+    'Second pick of the parking spots, and the aux on the bus.',
+    'Skips the lunch queue for a week.',
+  ]);
+
+  // Flat-colour avatars for a few people, so pictures show up in the demo.
+  for (const [handle, colour] of [
+    ['dawson', '4F7CFF'], ['priya', 'C8A24C'], ['marcus', '3FB27F'],
+    ['elena', 'D2603A'], ['sofia', '9B6BD6'],
+  ] as const) {
+    await run('UPDATE users SET avatar = ? WHERE id = ?', solidAvatar(colour), id(handle));
   }
 
   // Named invite links: one open-ended, one that runs out, one already dead.

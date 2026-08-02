@@ -15,7 +15,7 @@ import { rmSync } from 'node:fs';
 process.env.DATABASE_PATH = `data/test-${process.pid}-${Date.now()}.db`;
 
 const { all, db, get, run } = await import('../src/lib/db');
-const { authenticate, createUser, upsertGoogleUser } = await import('../src/lib/users');
+const { authenticate, createUser, updateProfile, upsertGoogleUser } = await import('../src/lib/users');
 const { isUniqueViolation } = await import('../src/lib/errors');
 const { consumeMagicLink, inspectMagicLink, MAGIC_LINKS_PER_WINDOW, requestMagicLink } =
   await import('../src/lib/magic');
@@ -43,6 +43,7 @@ const {
   revokeInvite,
   sell,
   sellCategorical,
+  setGroupPrizes,
   setMemberRole,
   startNextSeason,
   sweepResolutions,
@@ -50,6 +51,8 @@ const {
   updateGroup,
 } = await import('../src/lib/engine');
 const {
+  groupPrizes,
+  groupStats,
   latestSeason,
   marketById,
   marketOptions,
@@ -57,6 +60,7 @@ const {
   priceHistory,
   publicGroups,
   seasonArchive,
+  seasonAwards,
 } = await import('../src/lib/data');
 
 let checks = 0;
@@ -251,14 +255,33 @@ try {
     punishment: '',
   });
   const guardedMember = await createUser('guarded', 'Guarded Member', 'password', 'guarded@example.com');
-  ok((await joinGroup(guardedMember.id, guarded.invite_code)).join_status === 'pending', 'guarded groups queue join requests');
-  ok(!(await get('SELECT id FROM memberships WHERE user_id = ? AND group_id = ?', guardedMember.id, guarded.id)), 'pending accounts receive no bankroll');
-  await reviewMembershipRequest(admin.id, guarded.id, guardedMember.id, 'approve');
-  close(await balance(guardedMember.id, guarded.id), 1000, 'approval issues one seasonal bankroll');
+  // Holding a live code is already an admin's say-so, so it admits on the spot
+  // rather than making somebody queue behind a second door with the same key.
+  ok(
+    (await joinGroup(guardedMember.id, guarded.invite_code)).join_status === 'joined',
+    'an invite code admits immediately even when the group screens members',
+  );
+  close(await balance(guardedMember.id, guarded.id), 1000, 'an invited member is issued their bankroll at once');
   await removeMember(admin.id, guarded.id, guardedMember.id);
-  await joinGroup(guardedMember.id, guarded.invite_code);
-  await reviewMembershipRequest(admin.id, guarded.id, guardedMember.id, 'approve');
-  close(await balance(guardedMember.id, guarded.id), 0, 'rejoining cannot mint a second seasonal bankroll');
+
+  // Screening is what gates the codeless way in, from the public directory.
+  const screened = await createGroup(admin.id, {
+    name: 'Screened Group',
+    startingBalance: 1000,
+    seasonEnds: null,
+    prize: '',
+    punishment: '',
+    visibility: 'public',
+  });
+  const applicant = await createUser('applicant', 'Applicant', 'password', 'applicant@example.com');
+  ok((await joinPublicGroup(applicant.id, screened.id)).join_status === 'pending', 'a codeless join queues for approval');
+  ok(!(await get('SELECT id FROM memberships WHERE user_id = ? AND group_id = ?', applicant.id, screened.id)), 'pending accounts receive no bankroll');
+  await reviewMembershipRequest(admin.id, screened.id, applicant.id, 'approve');
+  close(await balance(applicant.id, screened.id), 1000, 'approval issues one seasonal bankroll');
+  await removeMember(admin.id, screened.id, applicant.id);
+  await joinPublicGroup(applicant.id, screened.id);
+  await reviewMembershipRequest(admin.id, screened.id, applicant.id, 'approve');
+  close(await balance(applicant.id, screened.id), 0, 'rejoining cannot mint a second seasonal bankroll');
 
   // ── invite links, directory, and roster management ─────────────────────────
   const linkGroup = await createGroup(admin.id, {
@@ -533,6 +556,111 @@ try {
     'the season result is announced to the group',
   );
   ok((await seasonArchive(group.id)).length === 1, 'the season archive lists closed seasons');
+
+  // ── profile pictures ───────────────────────────────────────────────────────
+  const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  ok((await updateProfile(a.id, { avatar: PNG })).avatar === PNG, 'a raster picture is stored');
+  ok((await updateProfile(a.id, { avatar: null })).avatar === null, 'a picture can be removed');
+  await throws(
+    () => updateProfile(a.id, { avatar: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' }),
+    'SVG is refused, because it can carry script into everyone else\'s page',
+  );
+  await throws(() => updateProfile(a.id, { avatar: 'https://example.com/me.png' }), 'a remote URL is refused');
+  await throws(() => updateProfile(a.id, { avatar: `data:image/png;base64,${'A'.repeat(200_000)}` }), 'an oversized picture is refused');
+  await throws(() => updateProfile(a.id, { name: '   ' }), 'a blank display name is refused');
+  ok((await updateProfile(a.id, { name: 'Ava Renamed' })).name === 'Ava Renamed', 'a display name can be changed');
+
+  // ── ranked prizes ──────────────────────────────────────────────────────────
+  const prizeGroup = await createGroup(admin.id, {
+    name: 'Prize Group',
+    startingBalance: 1000,
+    seasonEnds: null,
+    prize: 'legacy single prize',
+    punishment: 'dishes for a week',
+    requireMemberApproval: false,
+  });
+  await joinGroup(a.id, prizeGroup.invite_code);
+  await joinGroup(b.id, prizeGroup.invite_code);
+
+  await setGroupPrizes(admin.id, prizeGroup.id, ['Parking spot', 'Chipotle card', '  ', 'Bragging rights']);
+  const placed = await groupPrizes(prizeGroup.id);
+  ok(placed.length === 3, 'blank rows are dropped rather than leaving a gap');
+  ok(placed[0].place === 1 && placed[0].label === 'Parking spot', 'first place keeps its label');
+  ok(placed[2].place === 3 && placed[2].label === 'Bragging rights', 'places renumber to stay contiguous');
+  await throws(() => setGroupPrizes(a.id, prizeGroup.id, ['mine now']), 'only admins can set prizes');
+
+  // Give the three of them different totals so the places are unambiguous.
+  await run('UPDATE memberships SET balance = 3000 WHERE user_id = ? AND group_id = ?', a.id, prizeGroup.id);
+  await run('UPDATE memberships SET balance = 2000 WHERE user_id = ? AND group_id = ?', b.id, prizeGroup.id);
+  await run('UPDATE memberships SET balance = 100 WHERE user_id = ? AND group_id = ?', admin.id, prizeGroup.id);
+
+  const prizeClose = await startNextSeason(admin.id, prizeGroup.id, {});
+  ok(prizeClose.awards.length === 3, 'every place with somebody standing in it is awarded');
+  ok(prizeClose.awards[0].userId === a.id && prizeClose.awards[0].label === 'Parking spot', 'first place goes to the top finisher');
+  ok(prizeClose.awards[1].userId === b.id, 'second place goes to the runner-up');
+  ok(prizeClose.awards[2].userId === admin.id, 'third place goes to third');
+
+  const recorded = await seasonAwards(prizeGroup.id, 1);
+  ok(recorded.length === 3, 'the awards are written to the archive');
+  ok(recorded[0].name === 'Ava Renamed' && recorded[0].place === 1, 'the archive records who won each place');
+  ok(
+    (await get<{ n: number }>(
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM notifications WHERE user_id = ? AND kind = 'season'",
+      b.id,
+    ))!.n > 0,
+    'each winner is told what they won',
+  );
+
+  // ── dashboard numbers ──────────────────────────────────────────────────────
+  const dash = await groupStats(group.id, 1);
+  ok(dash.trades > 0, 'the dashboard counts the season\'s trades');
+  ok(dash.volume > 0, 'the dashboard totals traded volume');
+  ok(dash.resolved > 0, 'the dashboard counts settled markets');
+
+  // ── nobody settles a market they have money on ─────────────────────────────
+  // Without this an admin can open a market, back one side, and declare
+  // themselves right — a withdrawal from the group's liquidity, not a forecast.
+  const selfDealt = await createMarket(admin.id, group, {
+    question: 'Can an admin settle a market they are betting on?',
+    category: 'Other',
+    rules: '',
+    closesAt: at(7),
+    openPrice: 0.5,
+    funding: 25,
+  });
+  const stake = await buy(admin.id, selfDealt.id, 'YES', 200);
+  await throws(
+    () => proposeResolution(admin.id, selfDealt.id, 'YES', 'Because I say so.'),
+    'an admin holding a position cannot propose its result',
+  );
+
+  // A second, uninvolved admin is always allowed to call it.
+  await setMemberRole(admin.id, group.id, b.id, 'admin');
+  await proposeResolution(b.id, selfDealt.id, 'YES', 'Checked the official result.');
+  await run('UPDATE markets SET dispute_ends_at = ? WHERE id = ?', at(-1), selfDealt.id);
+  await throws(
+    () => finalizeResolution(admin.id, selfDealt.id),
+    'an admin holding a position cannot finalize it either',
+  );
+  await finalizeResolution(b.id, selfDealt.id);
+  ok((await marketById(selfDealt.id))!.status === 'resolved', 'a disinterested admin can settle it');
+  await setMemberRole(admin.id, group.id, b.id, 'member');
+
+  // Selling out is the other way through.
+  const sold = await createMarket(admin.id, group, {
+    question: 'Does closing the position unblock settlement?',
+    category: 'Other',
+    rules: '',
+    closesAt: at(7),
+    openPrice: 0.5,
+    funding: 25,
+  });
+  const held = await buy(admin.id, sold.id, 'YES', 200);
+  await throws(() => proposeResolution(admin.id, sold.id, 'YES', 'Still holding.'), 'holding still blocks it');
+  await sell(admin.id, sold.id, 'YES', held.shares);
+  await proposeResolution(admin.id, sold.id, 'YES', 'Position closed first.');
+  ok((await marketById(sold.id))!.status === 'resolving', 'selling out unblocks settlement');
+  void stake;
 
   console.log(`✓ ${checks} assertions passed`);
 } finally {

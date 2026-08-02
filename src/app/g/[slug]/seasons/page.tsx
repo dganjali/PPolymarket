@@ -63,7 +63,7 @@ export default async function SeasonsPage({ params }: { params: Promise<{ slug: 
 
               {season.champion_name ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                  <Avatar name={season.champion_name} size={38} radius={11} />
+                  <Avatar name={season.champion_name} src={season.champion_avatar} size={38} radius={11} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 15.5, fontWeight: 600, letterSpacing: '-0.01em' }}>
                       {season.champion_name}

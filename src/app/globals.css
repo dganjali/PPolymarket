@@ -350,7 +350,53 @@ textarea { resize: vertical; line-height: 1.45; }
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field > label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
 
+/* ── dashboard ────────────────────────────────────────────────────────────── */
+
+/* Stacked on phones; the media queries below lay these out as a real grid. */
+.dash { display: flex; flex-direction: column; gap: 12px; }
+.dash-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.dash-split { display: flex; flex-direction: column; gap: 12px; }
+.panel-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px;
+}
+
+.stat-tile {
+  background: var(--card); border: 1px solid var(--line-2); border-radius: 12px; padding: 11px 12px;
+}
+.stat-tile .n { font-family: var(--mono); font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* Podium: first place is the tall one, and stays first when it wraps. */
+.podium { display: grid; grid-template-columns: 1fr; gap: 9px; }
+/* Always stacked: the holder on one line, what they are playing for below. */
+.podium-row {
+  display: flex; flex-direction: column; gap: 8px; padding: 11px 12px;
+  border-radius: 12px; background: var(--card); border: 1px solid var(--line-2);
+}
+.podium-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.podium-label { font-size: 12px; line-height: 1.45; color: var(--ink-4); }
+.podium-row[data-place='1'] { background: var(--gold-bg); border-color: var(--gold-line); }
+.podium-place {
+  font-family: var(--mono); font-size: 11px; font-weight: 600; width: 26px; flex: none; color: var(--dim);
+}
+.podium-row[data-place='1'] .podium-place { color: var(--gold); }
+
 /* ── desktop ──────────────────────────────────────────────────────────────── */
+
+@media (min-width: 700px) {
+  .dash-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1024px) {
+  /* The dashboard is the one screen that earns the full laptop width. */
+  .dash-split { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(320px, 1fr); gap: 18px; align-items: start; }
+  .dash-side { position: sticky; top: 22px; display: flex; flex-direction: column; gap: 12px; }
+  .podium { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; }
+  .podium-row[data-place='1'] { padding-block: 16px; }
+
+  /* Two columns for the long single-column screens, instead of a phone strip. */
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 18px; align-items: start; }
+  .cols-side { position: sticky; top: 22px; display: flex; flex-direction: column; gap: 12px; }
+}
 
 @media (min-width: 1024px) {
   .sidebar {

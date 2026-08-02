@@ -37,6 +37,9 @@ export function NewMarketForm({
   const [openPrice, setOpenPrice] = useState(50);
   const [days, setDays] = useState(14);
   const [funding, setFunding] = useState(25);
+  // An explicit date wins over the shortcut buttons when both are set.
+  const [closesOn, setClosesOn] = useState('');
+  const today = new Date().toISOString().slice(0, 10);
 
   const validOutcomes = outcomes.map((outcome) => outcome.trim()).filter(Boolean);
   const ready =
@@ -242,8 +245,8 @@ export function NewMarketForm({
       </div>
 
       <div className="field">
-        <label>Closes</label>
-        <div style={{ display: 'flex', gap: 7 }}>
+        <label htmlFor="closesOn">Trading closes by</label>
+        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
           {CLOSE_OPTS.map(([label, d]) => (
             <button
               key={d}
@@ -251,14 +254,31 @@ export function NewMarketForm({
               className="btn btn-ghost btn-sm mono"
               style={{
                 flex: 1,
-                borderColor: days === d ? 'var(--gold)' : 'var(--line-3)',
-                color: days === d ? 'var(--gold)' : 'var(--ink-2)',
+                borderColor: days === d && !closesOn ? 'var(--gold)' : 'var(--line-3)',
+                color: days === d && !closesOn ? 'var(--gold)' : 'var(--ink-2)',
               }}
-              onClick={() => setDays(d)}
+              onClick={() => {
+                setDays(d);
+                setClosesOn('');
+              }}
             >
               {label}
             </button>
           ))}
+        </div>
+        <input
+          id="closesOn"
+          name="closesOn"
+          type="date"
+          className="mono"
+          value={closesOn}
+          min={today}
+          onChange={(e) => setClosesOn(e.target.value)}
+        />
+        <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.55 }}>
+          {closesOn
+            ? `Closes at the end of ${closesOn}. Nobody can trade after that, and it goes to the admin to resolve.`
+            : 'Pick a shortcut, or set the exact date it has to be settled by.'}
         </div>
       </div>
 

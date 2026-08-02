@@ -65,7 +65,7 @@ export default async function ActivityPage({ params }: { params: Promise<{ slug:
                 borderBottom: '1px solid #201E1B',
               }}
             >
-              <Avatar name={e.user_name ?? 'Minimarket'} size={28} radius={8} />
+              <Avatar name={e.user_name ?? 'Minimarket'} src={e.user_avatar} size={28} radius={8} />
               <div style={{ flex: 1, fontSize: 12.5, lineHeight: 1.45, color: KIND_COLOR[e.kind] ?? 'var(--ink-3)' }}>
                 <span style={{ color: 'var(--ink)' }}>{e.user_name ?? 'Minimarket'}</span> {e.body}
               </div>

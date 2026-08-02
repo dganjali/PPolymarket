@@ -7,6 +7,7 @@ import { authenticate, clearSession, createUser, currentUser, setSession } from 
 import { groupBySlug } from '@/lib/data';
 import { AppError } from '@/lib/errors';
 import { consumeMagicLink, requestMagicLink, TTL_MINUTES } from '@/lib/magic';
+import { updateProfile } from '@/lib/users';
 import {
   addMember,
   announce,
@@ -32,6 +33,7 @@ import {
   revokeInvite,
   sell,
   sellCategorical,
+  setGroupPrizes,
   setMemberRole,
   startNextSeason,
   transferOwnership,
@@ -104,6 +106,16 @@ async function appOrigin(): Promise<string> {
   const host = h.get('x-forwarded-host') ?? h.get('host');
   if (!host) throw new AppError('Could not work out this site’s address.');
   return `${h.get('x-forwarded-proto') ?? 'http'}://${host}`;
+}
+
+export async function updateProfileAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const avatar = str(fd, 'avatar');
+  const res = await guard(() => updateProfile(user.id, { name: str(fd, 'name'), avatar: avatar || null }));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  revalidatePath('/', 'layout');
+  return { ok: 'Profile saved.' };
 }
 
 export async function requestMagicLinkAction(_prev: FormState, fd: FormData): Promise<FormState> {
@@ -226,6 +238,21 @@ export async function updateSettingsAction(_prev: FormState, fd: FormData): Prom
   return { ok: 'Settings saved.' };
 }
 
+export async function updatePrizesAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+
+  const labels = fd.getAll('prize').map((value) => String(value));
+  const res = await guard(() => setGroupPrizes(user.id, group.id, labels));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  revalidatePath(`/g/${slug}`, 'layout');
+  const saved = res as string[];
+  return { ok: saved.length ? `${saved.length} place${saved.length === 1 ? '' : 's'} saved.` : 'Prizes cleared.' };
+}
+
 export async function announceAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
@@ -245,8 +272,15 @@ export async function createMarketAction(_prev: FormState, fd: FormData): Promis
   const group = await groupBySlug(slug);
   if (!group) return { error: 'Group not found.' };
 
+  // An explicit "closes by" date wins; otherwise fall back to the shortcut.
+  const chosen = str(fd, 'closesOn');
   const days = Math.max(1, Math.min(365, num(fd, 'days') || 14));
-  const closesAt = new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 19).replace('T', ' ');
+  const deadline = chosen
+    ? new Date(`${chosen}T23:59:59Z`)
+    : new Date(Date.now() + days * 86_400_000);
+  if (Number.isNaN(deadline.getTime())) return { error: 'That closing date is not a real date.' };
+  if (deadline.getTime() < Date.now()) return { error: 'Pick a closing date in the future.' };
+  const closesAt = deadline.toISOString().slice(0, 19).replace('T', ' ');
 
   const res = await guard(() =>
     createMarket(user.id, group, {

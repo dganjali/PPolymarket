@@ -1,7 +1,15 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { currentUser } from '@/lib/auth';
-import { groupBySlug, memberCount, membership, myGroups, standings, unreadNotificationCount } from '@/lib/data';
+import {
+  groupBySlug,
+  memberCount,
+  membership,
+  membershipRequests,
+  myGroups,
+  standings,
+  unreadNotificationCount,
+} from '@/lib/data';
 import { sweepClosures, sweepResolutions } from '@/lib/engine';
 import { money, signedMoney } from '@/lib/format';
 import { CreateFab, SidebarNav, TabBar, type NavItem } from '@/components/Nav';
@@ -30,13 +38,22 @@ export default async function GroupLayout({
   const base = `/g/${slug}`;
   const isAdmin = ms.role === 'admin';
 
+  const [rows, groups, unread, members, waiting] = await Promise.all([
+    standings(group.id, group.starting_balance),
+    myGroups(user.id),
+    unreadNotificationCount(user.id),
+    memberCount(group.id),
+    isAdmin ? membershipRequests(group.id).then((r) => r.length) : Promise.resolve(0),
+  ]);
+
   const navItems: NavItem[] = [
     { href: base, label: 'Markets', exact: true },
     { href: `${base}/portfolio`, label: 'Portfolio' },
     { href: `${base}/leaderboard`, label: 'Leaderboard' },
     { href: `${base}/seasons`, label: 'Seasons' },
     { href: `${base}/activity`, label: 'Activity' },
-    ...(isAdmin ? [{ href: `${base}/admin`, label: 'Admin' }] : []),
+    { href: '/notifications', label: 'Alerts', badge: unread },
+    ...(isAdmin ? [{ href: `${base}/admin`, label: 'Admin', badge: waiting }] : []),
   ];
 
   const tabItems: NavItem[] = [
@@ -44,20 +61,14 @@ export default async function GroupLayout({
     { href: `${base}/portfolio`, label: 'Portfolio' },
     { href: `${base}/leaderboard`, label: 'Board' },
     ...(isAdmin
-      ? [{ href: `${base}/admin`, label: 'Admin' }]
+      ? [{ href: `${base}/admin`, label: 'Admin', badge: waiting }]
       : [{ href: `${base}/activity`, label: 'Activity' }]),
-    { href: '/groups', label: 'You' },
+    { href: '/notifications', label: 'Alerts', badge: unread },
   ];
 
-  const rows = await standings(group.id, group.starting_balance);
   const mine = rows.find((r) => r.userId === user.id);
   const total = mine?.total ?? ms.balance;
   const pnl = total - group.starting_balance;
-  const [groups, unread, members] = await Promise.all([
-    myGroups(user.id),
-    unreadNotificationCount(user.id),
-    memberCount(group.id),
-  ]);
 
   return (
     <div className="shell">
@@ -116,6 +127,19 @@ export default async function GroupLayout({
         </div>
 
         <div style={{ flex: 1 }} />
+
+        <Link
+          href="/profile"
+          style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 6px', borderRadius: 9 }}
+        >
+          <Avatar name={user.name} src={user.avatar} size={26} radius={8} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {user.name}
+            </div>
+            <div className="mono" style={{ fontSize: 9.5, color: 'var(--dim-2)' }}>@{user.handle}</div>
+          </div>
+        </Link>
 
         <div className="card" style={{ padding: 11, borderRadius: 11 }}>
           <div className="stat-label">Cash</div>

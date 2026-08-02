@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { groupContext } from '@/lib/context';
 import {
   groupInvites,
+  groupPrizes,
   inviteState,
   marketDisputes,
   marketOptions,
@@ -18,6 +19,7 @@ import {
   InviteManager,
   MemberList,
   MembershipRequests,
+  PrizeEditor,
   SeasonControls,
   SettingsForm,
   StakesEditor,
@@ -40,6 +42,7 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
     membershipRequests(group.id),
     groupInvites(group.id),
   ]);
+  const prizes = await groupPrizes(group.id);
   const resolvableRows = await Promise.all(resolvable.map(async (market) => {
     const disputes = market.status === 'resolving' ? (await marketDisputes(market.id)).length : 0;
     const reviewOpen =
@@ -70,7 +73,9 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         </span>
       </div>
 
-      <StakesEditor slug={slug} prize={group.prize} punishment={group.punishment} />
+      <PrizeEditor slug={slug} prizes={prizes.map((p) => p.label)} />
+
+      <StakesEditor slug={slug} punishment={group.punishment} />
 
       <MembershipRequests slug={slug} requests={joinRequests} />
 

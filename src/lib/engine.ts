@@ -16,6 +16,7 @@ import {
 import {
   categoricalState,
   groupByAnyCode,
+  groupPrizes,
   inviteState,
   marketById,
   marketOptions,
@@ -166,7 +167,12 @@ export type JoinResult = GroupRow & { join_status: 'joined' | 'pending' };
  * Admits a user to a group, or files a join request when the group screens
  * members. `invite` is the link they arrived on, so its use can be counted.
  */
-async function admit(userId: number, group: GroupRow, invite?: InviteRow): Promise<JoinResult> {
+async function admit(
+  userId: number,
+  group: GroupRow,
+  invite?: InviteRow,
+  options: { bypassApproval?: boolean } = {},
+): Promise<JoinResult> {
   const existing = await membership(userId, group.id);
   if (existing) return { ...group, join_status: 'joined' };
 
@@ -174,7 +180,10 @@ async function admit(userId: number, group: GroupRow, invite?: InviteRow): Promi
     if (invite) await run('UPDATE group_invites SET uses = uses + 1 WHERE id = ?', invite.id);
   };
 
-  if (group.require_member_approval) {
+  // Someone holding a live invite code has already been vetted — an admin made
+  // the link and handed it to them. Making them queue for approval as well is
+  // just a second door with the same key.
+  if (group.require_member_approval && !options.bypassApproval) {
     if (await get('SELECT id FROM membership_requests WHERE user_id = ? AND group_id = ?', userId, group.id)) {
       return { ...group, join_status: 'pending' };
     }
@@ -204,7 +213,8 @@ export async function joinGroup(userId: number, code: string): Promise<JoinResul
     const state = inviteState(invite);
     if (state !== 'active') fail(`That invite link is ${state}. Ask an admin for a new one.`);
   }
-  return admit(userId, group, invite);
+  // Any working code — a named link or the group's own — admits on the spot.
+  return admit(userId, group, invite, { bypassApproval: true });
 }
 
 /** Joining straight from the public directory, with no code in hand. */
@@ -424,6 +434,30 @@ export async function transferOwnership(userId: number, groupId: number, targetI
     await logEvent(groupId, null, userId, 'group', `handed the group over to ${target.name}`);
     await notifyUser(targetId, groupId, null, 'role', `You now own ${group.name}.`);
   });
+}
+
+/**
+ * Replaces the group's prize list. Places are renumbered 1, 2, 3… from the
+ * order given, so removing second place promotes third rather than leaving a gap.
+ */
+export async function setGroupPrizes(userId: number, groupId: number, labels: string[]) {
+  await requireAdmin(userId, groupId);
+  const cleaned = labels.map((label) => label.trim().slice(0, 300)).filter(Boolean).slice(0, 10);
+
+  await tx(async () => {
+    await run('DELETE FROM group_prizes WHERE group_id = ?', groupId);
+    for (const [index, label] of cleaned.entries()) {
+      await run(
+        'INSERT INTO group_prizes (group_id, place, label) VALUES (?, ?, ?)',
+        groupId,
+        index + 1,
+        label,
+      );
+    }
+    // The legacy single-prize column stays in step so older views keep working.
+    await run('UPDATE groups SET prize = ? WHERE id = ?', cleaned[0] ?? '', groupId);
+  });
+  return cleaned;
 }
 
 /** A note from an admin that lands in the activity log and every member's inbox. */
@@ -687,14 +721,26 @@ export async function markNotificationsRead(userId: number) {
   await run("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND read_at IS NULL", userId);
 }
 
+export interface SeasonAward {
+  place: number;
+  label: string;
+  userId: number;
+  name: string;
+  total: number;
+}
+
 export interface SeasonClose {
   season: number;
   champion?: { userId: number; name: string; total: number };
   lastPlace?: { userId: number; name: string; total: number };
+  awards: SeasonAward[];
   prize: string;
   punishment: string;
   entrants: number;
 }
+
+const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th'];
+export const ordinal = (place: number) => ORDINALS[place] ?? `${place}th`;
 
 /** The line that goes in the activity log and everybody's inbox. */
 function seasonHeadline(group: GroupRow, close: SeasonClose): string {
@@ -702,7 +748,9 @@ function seasonHeadline(group: GroupRow, close: SeasonClose): string {
   const parts = [
     `Season ${close.season} of ${group.name} goes to ${close.champion.name} at ${money(close.champion.total)}.`,
   ];
-  if (close.prize) parts.push(`They win: ${close.prize}`);
+  for (const award of close.awards) {
+    parts.push(`${ordinal(award.place)} ${award.name} — ${award.label}.`);
+  }
   if (close.lastPlace && close.lastPlace.userId !== close.champion.userId) {
     parts.push(`Last place: ${close.lastPlace.name} at ${money(close.lastPlace.total)}.`);
     if (close.punishment) parts.push(`They owe: ${close.punishment}`);
@@ -740,10 +788,22 @@ export async function startNextSeason(
   const top = rows[0];
   const bottom = rows.length > 1 ? rows[rows.length - 1] : undefined;
   const note = (input.note ?? '').trim().slice(0, 600);
+
+  // Each place claims the finisher who came in at that rank. A prize with
+  // nobody standing in its place simply goes unawarded.
+  const prizes = await groupPrizes(groupId);
+  const awards: SeasonAward[] = prizes.flatMap((prize) => {
+    const winner = rows[prize.place - 1];
+    return winner
+      ? [{ place: prize.place, label: prize.label, userId: winner.userId, name: winner.name, total: winner.total }]
+      : [];
+  });
+
   const close: SeasonClose = {
     season: group.current_season,
     champion: top && { userId: top.userId, name: top.name, total: top.total },
     lastPlace: bottom && { userId: bottom.userId, name: bottom.name, total: bottom.total },
+    awards,
     prize: group.prize,
     punishment: group.punishment,
     entrants: rows.length,
@@ -798,16 +858,30 @@ export async function startNextSeason(
       groupId,
     );
 
+    for (const award of awards) {
+      await run(
+        `INSERT INTO season_awards (group_id, season_number, place, user_id, label, final_total)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        groupId,
+        group.current_season,
+        award.place,
+        award.userId,
+        award.label,
+        award.total,
+      );
+    }
+
     await logEvent(groupId, null, userId, 'season', headline);
     if (note) await logEvent(groupId, null, userId, 'announcement', note);
     await notifyMembers(groupId, userId, null, 'season', headline);
-    if (close.champion && close.champion.userId !== userId) {
+    for (const award of awards) {
+      if (award.userId === userId) continue;
       await notifyUser(
-        close.champion.userId,
+        award.userId,
         groupId,
         null,
         'season',
-        `You won season ${close.season} of ${group.name}.${group.prize ? ` Prize: ${group.prize}` : ''}`,
+        `You finished ${ordinal(award.place)} in season ${close.season} of ${group.name}. You win: ${award.label}`,
       );
     }
     if (close.lastPlace && close.lastPlace.userId !== userId && close.lastPlace.userId !== close.champion?.userId) {
@@ -1015,7 +1089,49 @@ async function settleMarket(m: MarketRow, outcome: string, actorId: number | nul
   });
 }
 
-/** Immediate settlement retained for seeds and trusted maintenance scripts. */
+/**
+ * Whether this person has a bet riding on the outcome. An LP stake in a market
+ * you created is not a bet — it pays the leftovers either way — so only traded
+ * positions count.
+ */
+async function holdsPosition(userId: number, marketId: number): Promise<boolean> {
+  const binary = (await get<{ n: number }>(
+    `SELECT CAST(COUNT(*) AS INTEGER) AS n FROM positions
+      WHERE market_id = ? AND user_id = ? AND (yes_shares > 0.0001 OR no_shares > 0.0001)`,
+    marketId,
+    userId,
+  ))!.n;
+  if (binary) return true;
+  return !!(await get<{ n: number }>(
+    `SELECT CAST(COUNT(*) AS INTEGER) AS n FROM option_positions
+      WHERE market_id = ? AND user_id = ? AND shares > 0.0001`,
+    marketId,
+    userId,
+  ))!.n;
+}
+
+/**
+ * Nobody settles a market they have money on.
+ *
+ * Without this an admin can open a market, bet on it, and declare themselves
+ * right — which is not a prediction, it is a withdrawal from the group's
+ * liquidity. Selling out first is always available, and in a group with more
+ * than one admin somebody uninvolved can simply do it instead.
+ */
+async function requireDisinterested(userId: number, marketId: number) {
+  if (await holdsPosition(userId, marketId)) {
+    fail(
+      'You hold a position in this market, so you cannot be the one to settle it. ' +
+        'Sell out first, or ask another admin to call it.',
+    );
+  }
+}
+
+/**
+ * Immediate settlement for seeds and trusted maintenance scripts. This is the
+ * one path that skips the conflict check above, and nothing in the app calls
+ * it — members resolve through propose → dispute window → finalize.
+ */
 export async function resolveMarket(userId: number, marketId: number, outcome: string) {
   const m = await marketById(marketId) ?? fail('Market not found.');
   await requireAdmin(userId, m.group_id);
@@ -1025,6 +1141,7 @@ export async function resolveMarket(userId: number, marketId: number, outcome: s
 export async function proposeResolution(userId: number, marketId: number, outcome: string, evidence: string) {
   const m = await marketById(marketId) ?? fail('Market not found.');
   await requireAdmin(userId, m.group_id);
+  await requireDisinterested(userId, marketId);
   if (!['open', 'closed', 'resolving'].includes(m.status)) fail('That market cannot be resolved.');
   const outcomeLabel =
     m.market_type === 'categorical'
@@ -1096,6 +1213,7 @@ export async function disputeResolution(userId: number, marketId: number, reason
 export async function finalizeResolution(userId: number, marketId: number) {
   const m = await marketById(marketId) ?? fail('Market not found.');
   await requireAdmin(userId, m.group_id);
+  await requireDisinterested(userId, marketId);
   if (m.status !== 'resolving' || !m.proposed_outcome) fail('There is no proposed result to finalize.');
   const review = (await get<{ disputes: number; expired: number }>(
     `SELECT (SELECT CAST(COUNT(*) AS INTEGER) FROM market_disputes WHERE market_id = m.id) AS disputes,
