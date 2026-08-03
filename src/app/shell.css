@@ -1,0 +1,221 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   The app shell: sidebar, top bar, phone tab bar, and the floating action.
+   Loaded after globals.css, so anything here wins over the base rules.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── sidebar ──────────────────────────────────────────────────────────────── */
+
+.sidebar-brand {
+  display: flex; align-items: center; gap: 9px;
+  padding: 2px 6px 0; color: var(--ink);
+}
+.sidebar-brand-name { font-size: var(--t-body); font-weight: 600; letter-spacing: -0.01em; }
+
+.sidebar-section { display: flex; flex-direction: column; gap: 3px; }
+.sidebar-title {
+  padding: 0 8px 4px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--dim-2);
+}
+
+/* The group switcher. */
+.sidebar-group {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 8px; border-radius: var(--r-sm);
+  color: var(--ink-4);
+  transition: background var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
+}
+.sidebar-group:hover { background: var(--chip); color: var(--ink-2); }
+.sidebar-group[data-on='true'] { background: var(--accent-bg); color: var(--ink); }
+.sidebar-group-name {
+  flex: 1; min-width: 0; font-size: var(--t-small); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-group-tick { width: 5px; height: 5px; border-radius: var(--r-full); background: var(--accent); flex: none; }
+
+/* ── nav rows, with the reveal ────────────────────────────────────────────── */
+
+.nav-list { display: flex; flex-direction: column; gap: 1px; }
+
+.nav-row {
+  display: block; padding: 8px; border-radius: var(--r-sm);
+  color: var(--ink-4);
+  transition: background var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
+}
+.nav-row:hover { background: var(--chip); color: var(--ink-2); }
+.nav-row[data-on='true'] { background: var(--chip-hi); color: var(--ink); }
+
+.nav-row-top { display: flex; align-items: center; gap: 9px; }
+.nav-icon { display: flex; flex: none; color: currentColor; opacity: 0.85; }
+.nav-row[data-on='true'] .nav-icon { color: var(--accent-hi); opacity: 1; }
+.nav-label { flex: 1; min-width: 0; font-size: var(--t-small); font-weight: 500; }
+
+.nav-badge {
+  min-width: 17px; height: 17px; padding: 0 5px; border-radius: var(--r-full);
+  background: var(--accent); color: #fff; font-size: 10px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+
+/*
+ * The description. Collapsed to zero rows, expanded to its own content height.
+ * `grid-template-rows: 0fr -> 1fr` is the only way to transition to "however
+ * tall the text turns out to be" without JavaScript measuring it — a
+ * max-height guess either clips a two-line description or eases through empty
+ * space for the tail of the animation.
+ */
+.nav-reveal {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-slow) var(--ease-out);
+}
+.nav-reveal-inner { overflow: hidden; min-height: 0; }
+.nav-desc {
+  display: block;
+  padding: 4px 0 2px 26px;
+  font-size: var(--t-micro); line-height: 1.45; color: var(--dim);
+  /* Behind the row: the highlight lands first, the words follow it in. */
+  opacity: 0; transform: translateY(-3px);
+  transition:
+    opacity var(--dur-base) var(--ease-out) 60ms,
+    transform var(--dur-base) var(--ease-out) 60ms;
+}
+
+/* Keyboard focus opens it everywhere; pointer hover only where hover exists. */
+.nav-row:focus-visible .nav-reveal { grid-template-rows: 1fr; }
+.nav-row:focus-visible .nav-desc { opacity: 1; transform: none; }
+
+@media (hover: hover) {
+  .nav-row:hover .nav-reveal { grid-template-rows: 1fr; }
+  .nav-row:hover .nav-desc { opacity: 1; transform: none; }
+}
+
+/* ── sidebar footer ───────────────────────────────────────────────────────── */
+
+.sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--s-2); }
+
+.sidebar-me {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 8px; border-radius: var(--r-sm);
+  transition: background var(--dur-base) var(--ease-out);
+}
+.sidebar-me:hover { background: var(--chip); }
+.sidebar-me-main { flex: 1; min-width: 0; }
+.sidebar-me-name {
+  font-size: var(--t-small); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-me-handle { font-family: var(--mono); font-size: 9.5px; color: var(--dim-2); margin-top: 1px; }
+
+/* The cash tile. Its label and figure sit on their own lines with room to
+   breathe — the old one overlapped a four-figure balance with its own label. */
+.sidebar-cash {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 11px 12px; border-radius: var(--r-md);
+  background: var(--card); border: 1px solid var(--line-2);
+}
+.sidebar-cash-label {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--dim-2);
+}
+.sidebar-cash-value {
+  font-family: var(--mono); font-size: 17px; font-weight: 600;
+  letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+.sidebar-cash-pnl { font-family: var(--mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+/* ── top bar (phones) ─────────────────────────────────────────────────────── */
+
+.topbar {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: max(12px, env(safe-area-inset-top)) 16px 11px;
+  background: color-mix(in srgb, var(--app) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-group { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.topbar-name { font-size: var(--t-body); font-weight: 600; letter-spacing: -0.01em; }
+.topbar-sub { font-family: var(--mono); font-size: 10px; color: var(--ink-5); margin-top: 2px; }
+
+.topbar-alerts {
+  position: relative; display: flex; flex: none;
+  width: 34px; height: 34px; align-items: center; justify-content: center;
+  border-radius: var(--r-sm); background: var(--card); color: var(--ink-4);
+}
+.topbar-alerts .nav-badge { position: absolute; top: -4px; right: -4px; }
+
+.topbar-cash { text-align: right; flex: none; }
+.topbar-cash-value {
+  font-family: var(--mono); font-size: 15px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.topbar-cash-pnl { font-family: var(--mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+/* ── phone tab bar ────────────────────────────────────────────────────────── */
+
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  display: flex; padding: 6px 6px calc(8px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--app) 92%, transparent);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line);
+}
+.tabbar-marker {
+  position: absolute; top: 6px; bottom: calc(8px + env(safe-area-inset-bottom));
+  left: 6px;
+  border-radius: var(--r-sm); background: var(--chip);
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.tabbar-tab {
+  position: relative;
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 7px 0; font-size: 10.5px; font-weight: 500; color: var(--dim-2);
+  transition: color var(--dur-base) var(--ease-out);
+}
+.tabbar-tab[data-on='true'] { color: var(--ink); font-weight: 600; }
+.tabbar-icon { position: relative; display: flex; }
+.tabbar-icon .nav-badge {
+  position: absolute; top: -6px; left: 10px;
+  min-width: 15px; height: 15px; font-size: 9px;
+}
+
+.fab {
+  position: fixed; right: 18px; bottom: calc(var(--nav-h) + 18px); z-index: 41;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--lift-2);
+}
+.fab:hover { background: var(--accent-hi); }
+
+/* ── desktop ──────────────────────────────────────────────────────────────── */
+
+@media (min-width: 1024px) {
+  .sidebar {
+    display: flex; flex-direction: column; gap: var(--s-4);
+    width: 244px; flex: none;
+    border-right: 1px solid var(--line);
+    padding: 18px 12px 16px;
+    position: sticky; top: 0; height: 100dvh; overflow-y: auto;
+  }
+  .tabbar, .fab, .topbar { display: none; }
+  :root { --nav-h: 0px; }
+}
+
+/* The plan chip. Admin-only, and quiet: a paid group should be reminded that it
+   is paying about as often as it is reminded what its own name is. */
+.sidebar-plan {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; border-radius: var(--r-sm);
+  background: var(--panel); border: 1px solid var(--line-2);
+  transition: border-color var(--dur-base) var(--ease-out);
+}
+.sidebar-plan:hover { border-color: var(--line-3); }
+.sidebar-plan-label {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--dim-2);
+}
+.sidebar-plan-name { font-size: var(--t-small); font-weight: 600; color: var(--ink-3); }
+.sidebar-plan[data-plan='pro'] .sidebar-plan-name,
+.sidebar-plan[data-plan='campus'] .sidebar-plan-name { color: var(--accent-hi); }

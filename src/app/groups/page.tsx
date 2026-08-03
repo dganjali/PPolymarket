@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { currentUser } from '@/lib/auth';
 import { myGroups, unreadNotificationCount } from '@/lib/data';
 import { money0 } from '@/lib/format';
+import { Bell, Person, Plus } from '@/components/Icon';
 import { Avatar } from '@/components/ui';
 import { logoutAction } from '../actions';
 
@@ -13,56 +14,63 @@ export default async function GroupsPage() {
   const [groups, unread] = await Promise.all([myGroups(user.id), unreadNotificationCount(user.id)]);
 
   return (
-    <main className="account">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Avatar name={user.name} src={user.avatar} size={38} radius={12} />
+    <main className="account stack stagger">
+      <header className="groups-head">
+        <div className="groups-me">
+          <Avatar name={user.name} src={user.avatar} size={40} radius={13} />
           <div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>{user.name}</div>
-            <div className="mono" style={{ fontSize: 11, color: 'var(--ink-5)' }}>
-              @{user.handle}
-            </div>
+            <div className="groups-me-name">{user.name}</div>
+            <div className="groups-me-handle">@{user.handle}</div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 7 }}>
-          <Link href="/profile" className="btn btn-ghost btn-sm">Profile</Link>
-          <Link href="/notifications" className="btn btn-ghost btn-sm">
-            Alerts{unread ? ` · ${unread}` : ''}
+        {/* Sign out is deliberately last and unadorned: it and "Profile" used to
+            be three identical pills, so the destructive one read as routine. */}
+        <div className="groups-actions">
+          <Link href="/profile" className="btn btn-ghost btn-sm pressable icon-btn" aria-label="Profile">
+            <Person size={15} />
+          </Link>
+          <Link href="/notifications" className="btn btn-ghost btn-sm pressable icon-btn" aria-label={`Alerts${unread ? `, ${unread} unread` : ''}`}>
+            <Bell size={15} />
+            {!!unread && <span className="nav-badge mono">{unread > 99 ? '99+' : unread}</span>}
           </Link>
           <form action={logoutAction}>
-            <button type="submit" className="btn btn-ghost btn-sm">Sign out</button>
+            <button type="submit" className="btn btn-ghost btn-sm pressable">
+              Sign out
+            </button>
           </form>
         </div>
-      </div>
+      </header>
 
       <div>
-        <div className="display" style={{ fontSize: 27 }}>
-          Your groups
-        </div>
-        <div className="lede" style={{ marginTop: 8 }}>
+        <h1 className="h-display">Your groups</h1>
+        <p className="lede auth-lede">
           Each group has its own bankroll, its own markets, and its own stakes.
-        </div>
+        </p>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+      <section className="stack-tight">
         {groups.map((g) => (
-          <Link
-            key={g.id}
-            href={`/g/${g.slug}`}
-            className="card"
-            style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 13 }}
-          >
-            <Avatar name={g.name} size={38} radius={11} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 600 }}>{g.name}</div>
-              <div className="mono" style={{ fontSize: 10, color: 'var(--dim)', marginTop: 2 }}>
-                {g.members} member{g.members === 1 ? '' : 's'} · season {g.current_season}
-                {g.role === 'admin' ? ' · admin' : ''}
-                {g.visibility === 'public' ? ' · public' : ''}
+          <Link key={g.id} href={`/g/${g.slug}`} className="group-card liftable">
+            <Avatar name={g.name} size={40} radius={13} />
+            <div className="group-card-main">
+              <div className="group-card-name">{g.name}</div>
+              <div className="group-card-sub">
+                <span>
+                  {g.members} member{g.members === 1 ? '' : 's'}
+                </span>
+                <span className="mk-dot" />
+                <span>season {g.current_season}</span>
+                {g.visibility === 'public' && (
+                  <>
+                    <span className="mk-dot" />
+                    <span>public</span>
+                  </>
+                )}
               </div>
             </div>
-            <div className="mono" style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>
-              {money0(g.balance)}
+            <div className="group-card-figure">
+              <div className="group-card-cash">{money0(g.balance)}</div>
+              {g.role === 'admin' && <div className="group-card-role">admin</div>}
             </div>
           </Link>
         ))}
@@ -73,19 +81,25 @@ export default async function GroupsPage() {
             code around.
           </div>
         )}
-      </div>
+      </section>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <Link href="/join" className="btn btn-primary">
-          Join with an invite code
-        </Link>
-        <Link href="/discover" className="btn btn-ghost">
+      {/* One primary action, two alternatives — not three identical walls. */}
+      <Link href="/join" className="btn btn-primary pressable">
+        Join with an invite code
+      </Link>
+      <div className="groups-cta">
+        <Link href="/discover" className="btn btn-ghost btn-sm pressable">
           Browse public communities
         </Link>
-        <Link href="/new-group" className="btn btn-ghost">
+        <Link href="/new-group" className="btn btn-ghost btn-sm pressable" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+          <Plus size={14} weight={2} />
           Start a new group
         </Link>
       </div>
+
+      <Link href="/pricing" className="t-micro" style={{ color: 'var(--dim)' }}>
+        Plans and pricing →
+      </Link>
     </main>
   );
 }

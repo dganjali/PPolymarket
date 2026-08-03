@@ -5,6 +5,7 @@ import { openLegs, standings } from '@/lib/data';
 import { money0, pctLabel, signedMoney } from '@/lib/format';
 import { ProfileForm } from '@/components/ProfileForm';
 import { LeaveGroup } from '@/components/LeaveGroup';
+import { MarketGlyph } from '@/components/MarketGlyph';
 
 /** Your bets, your record, and who you are — the three things that are yours. */
 export default async function YouPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -54,26 +55,23 @@ export default async function YouPage({ params }: { params: Promise<{ slug: stri
   const won = settled.filter((s) => s.realized > 0).length;
 
   return (
-    <div className="wrap stack" style={{ maxWidth: 720 }}>
-      <section className="surface">
+    <div className="wrap narrow stack stagger">
+      <section className="surface worth">
         <div className="t-micro">You&rsquo;re worth</div>
-        <div className="mono h-display" style={{ marginTop: 4 }}>{money0(total)}</div>
-        <div
-          className="mono t-small"
-          style={{ color: pnl >= 0 ? 'var(--yes-hi)' : 'var(--no-hi)', marginTop: 2 }}
-        >
+        <div className="mono worth-total">{money0(total)}</div>
+        <div className={`mono worth-pnl ${pnl >= 0 ? 'up' : 'down'}`}>
           {signedMoney(pnl)} since the season started
         </div>
 
-        <div style={{ display: 'flex', gap: 'var(--s-3)', marginTop: 'var(--s-3)', paddingTop: 'var(--s-3)', borderTop: '1px solid var(--line)' }}>
+        <div className="worth-split">
           {([
             ['Spare cash', money0(ms.balance)],
             ['On the table', money0(invested)],
             ['Position', rank ? `${rank} of ${rows.length}` : '—'],
           ] as const).map(([label, value]) => (
-            <div key={label} style={{ flex: 1, minWidth: 0 }}>
+            <div key={label} className="worth-stat">
               <div className="t-micro">{label}</div>
-              <div className="mono" style={{ fontSize: 'var(--t-head)', fontWeight: 600, marginTop: 3 }}>{value}</div>
+              <div className="mono worth-stat-value">{value}</div>
             </div>
           ))}
         </div>
@@ -84,20 +82,21 @@ export default async function YouPage({ params }: { params: Promise<{ slug: stri
           <h2 className="h-head">Bets running</h2>
           <span className="t-micro">{legs.length}</span>
         </div>
-        <div className="surface" style={{ padding: 'var(--s-2)' }}>
+        <div className="surface rows">
           {legs.map((leg) => {
             const up = leg.value >= leg.cost;
             return (
               <Link key={`${leg.market.id}-${leg.optionId ?? leg.side}`} href={`${base}/m/${leg.market.id}`} className="row">
+                <MarketGlyph seed={leg.market.id} category={leg.market.category} size={30} />
                 <div className="row-main">
-                  <div className="row-name" style={{ fontSize: 'var(--t-small)' }}>{leg.market.question}</div>
+                  <div className="row-name leg-q">{leg.market.question}</div>
                   <div className="row-sub">
                     {leg.side} · {pctLabel(leg.price)} chance now
                   </div>
                 </div>
                 <div className="row-figure">
                   {money0(leg.value)}
-                  <div className="t-micro" style={{ color: up ? 'var(--yes-hi)' : 'var(--no-hi)', marginTop: 2 }}>
+                  <div className={`t-micro leg-move ${up ? 'up' : 'down'}`}>
                     {signedMoney(leg.value - leg.cost)}
                   </div>
                 </div>
@@ -105,8 +104,8 @@ export default async function YouPage({ params }: { params: Promise<{ slug: stri
             );
           })}
           {legs.length === 0 && (
-            <p className="t-small" style={{ margin: 0, padding: 'var(--s-2)' }}>
-              Nothing running. Back something on <Link href={base} style={{ color: 'var(--accent)' }}>Home</Link>.
+            <p className="row-empty t-small">
+              Nothing running. Back something on <Link href={base} className="ink-link">Markets</Link>.
             </p>
           )}
         </div>
@@ -118,14 +117,14 @@ export default async function YouPage({ params }: { params: Promise<{ slug: stri
             <h2 className="h-head">Settled</h2>
             <span className="t-micro">{won} of {settled.length} called right</span>
           </div>
-          <div className="surface" style={{ padding: 'var(--s-2)' }}>
+          <div className="surface rows">
             {settled.map((s) => (
               <Link key={s.id} href={`${base}/m/${s.id}`} className="row">
                 <div className="row-main">
-                  <div className="row-name" style={{ fontSize: 'var(--t-small)' }}>{s.question}</div>
+                  <div className="row-name leg-q">{s.question}</div>
                   <div className="row-sub">ended {s.outcome}</div>
                 </div>
-                <div className="mono" style={{ fontSize: 'var(--t-small)', color: s.realized >= 0 ? 'var(--yes-hi)' : 'var(--no-hi)' }}>
+                <div className={`mono leg-realized ${s.realized >= 0 ? 'up' : 'down'}`}>
                   {signedMoney(s.realized)}
                 </div>
               </Link>

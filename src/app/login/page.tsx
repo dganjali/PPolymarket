@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { AuthForm } from '@/components/AuthForm';
+import { AuthAside } from '@/components/AuthAside';
 import { currentUser, SESSION_MISCONFIGURED, sessionsConfigured } from '@/lib/auth';
 
 export default async function LoginPage({
@@ -16,12 +17,13 @@ export default async function LoginPage({
       : undefined;
 
   return (
-    <main className="auth" style={{ gap: 26 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+    <main className="auth-shell">
+      <div className="auth">
+      <div className="auth-head">
         <div className="logo">M</div>
         <div>
           <div className="display">Welcome back.</div>
-          <div className="lede" style={{ marginTop: 8 }}>
+          <div className="lede auth-lede">
             Play money. The only thing really at stake is whatever your admin put up.
           </div>
         </div>
@@ -33,6 +35,8 @@ export default async function LoginPage({
         externalError={externalError}
         configError={sessionsConfigured() ? undefined : SESSION_MISCONFIGURED}
       />
+      </div>
+      <AuthAside />
     </main>
   );
 }

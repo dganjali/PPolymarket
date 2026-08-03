@@ -137,6 +137,13 @@ is per-market solvency.
 - **Trading** — buy and sell either side, live quotes with price impact and
   payout, a depth ladder showing what it costs to move the price, public
   positions, and a comment thread per market.
+- **The market page** — a time-axis price chart with a hover crosshair, per-line
+  readings, timeframe filters (1H → ALL) and markers on the moments that moved
+  the market: the trades that swung it, the comments, the admin decisions. A
+  sticky order ticket beside it, the outcome list under it, and the rest of the
+  group's markets in the rail.
+- **Plans** — Free, Plus, Pro and Campus. Groups pay, members never do, and
+  trading is never gated on any tier. See [MONETIZATION.md](MONETIZATION.md).
 - **Portfolio** — open legs with cost basis and mark-to-market, settled history
   with realized P&L, standings across the group.
 - **Admin** — approval queue, resolution review, the invite manager, stakes
@@ -149,7 +156,10 @@ is per-market solvency.
 - **Notifications** — approvals, disputes, results, role changes, season results
   and announcements appear in a personal inbox.
 
-Mobile-first, with the desktop trading view from the design at ≥1024px.
+Mobile-first, with the desktop trading view at ≥1024px. Every colour, size,
+space, radius and duration comes from a token in `src/app/globals.css`; motion
+is a handful of shared classes there, and `prefers-reduced-motion` switches all
+of it off in one rule.
 
 ## Keeping credits meaningful
 
@@ -178,26 +188,49 @@ stake bounds the market maker's maximum loss.
 ## Layout
 
 ```
-src/lib/amm.ts        market maker — pure, shared by server and client
-src/lib/engine.ts     transactional writes: groups, invites, markets, trades,
-                      resolution, seasons
-src/lib/db.ts         SQLite locally, Postgres/Supabase in production
-src/lib/data.ts       read queries
-src/lib/users.ts      accounts, passwords, Google and email identities
-src/lib/magic.ts      single-use sign-in links
-src/lib/mail.ts       Resend transport
-src/app/actions.ts    server actions
-src/app/g/[slug]/     the group app
-src/app/discover/     the public group directory
-scripts/              seed + tests
+src/lib/amm.ts          market maker — pure, shared by server and client
+src/lib/categorical.ts  LMSR for multiple-choice markets
+src/lib/chart.ts        chart maths — step paths, windows, ticks (pure)
+src/lib/engine.ts       transactional writes: groups, invites, markets, trades,
+                        resolution, seasons
+src/lib/db.ts           SQLite locally, Postgres/Supabase in production
+src/lib/data.ts         read queries
+src/lib/history.ts      price series, chart annotations, related markets
+src/lib/plans.ts        the plan ladder and entitlements (pure)
+src/lib/entitlements.ts limit checks against the database
+src/lib/billing.ts      billing provider — stub today, Stripe-shaped
+src/lib/users.ts        accounts, passwords, Google and email identities
+src/lib/magic.ts        single-use sign-in links
+src/lib/mail.ts         Resend transport
+src/app/actions.ts      server actions
+src/app/globals.css     design tokens, primitives and the motion system
+src/app/*.css           one stylesheet per area (shell, market, screens, …)
+src/app/g/[slug]/       the group app
+src/app/pricing/        the public pricing page
+src/app/discover/       the public group directory
+scripts/                seed + tests
 ```
 
 Next.js App Router and TypeScript, with a small SQL adapter over `node:sqlite`
 locally and Postgres in production. Auth is scrypt-hashed passwords with an
 HMAC-signed session cookie.
 
+## Paying for it
+
+Plans live in [`src/lib/plans.ts`](src/lib/plans.ts) and are enforced at four
+chokepoints in the engine — `issueMembership`, `createMarket`, `createInvite`
+and `setMemberRole`. Two rules hold everywhere: **trading is never gated**, and
+**a downgrade never deletes anything**; a group over its limits keeps every
+member, market and position and simply cannot add more.
+
+With no `STRIPE_SECRET_KEY` set, `src/lib/billing.ts` runs a stub that applies
+plans immediately, charges nothing, and says so on screen. Set the key and the
+four price ids and the Stripe adapter takes over. The webhook route is the one
+piece still to build — see [MONETIZATION.md](MONETIZATION.md).
+
 ## Caveats
 
 Prices update on navigation rather than streaming — there are no websockets. A
 disputed result still ends with an admin decision; the review trail makes that
-decision visible to the group.
+decision visible to the group. Multiple-choice markets can be bought but not
+sold short: there is no "No" on a single outcome yet, only a buy on each.

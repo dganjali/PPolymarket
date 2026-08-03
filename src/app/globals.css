@@ -66,11 +66,75 @@
   --s-4: 24px;
   --s-5: 36px;
 
+  --r-xs: 7px;
   --r-sm: 10px;
   --r-md: 14px;
   --r-lg: 18px;
+  --r-xl: 24px;
+  --r-full: 999px;
 
   --nav-h: 72px;
+
+  /* ── elevation ─────────────────────────────────────────────────────────────
+     Three steps. Anything that floats over the page uses one of them, so a
+     dropdown and a bottom sheet cast the same kind of shadow. */
+  --lift-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --lift-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --lift-3: 0 18px 48px rgba(0, 0, 0, 0.6);
+  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+
+  /* ── motion ────────────────────────────────────────────────────────────────
+     Four durations and three curves, and nothing outside them. The rule:
+       fast   — anything under the cursor. Must feel instant, never animated.
+       base   — a state change you asked for: a toggle, a tab, a hover reveal.
+       slow   — something arriving or leaving: a panel, a sheet, a toast.
+       lazy   — ambient only. Never on the critical path of a click.
+     Trading UIs feel broken when they lag, so nothing on hover exceeds `base`. */
+  --dur-fast: 90ms;
+  --dur-base: 160ms;
+  --dur-slow: 260ms;
+  --dur-lazy: 420ms;
+
+  /* Decelerating: the default for anything entering or responding to input. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Symmetric: for things that move between two known places (a tab underline). */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* A little overshoot, reserved for confirmations — never for layout. */
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  --rise: 8px;
+
+  /* ── series colours ────────────────────────────────────────────────────────
+     Outcome n takes colour n, everywhere it appears: the chart line, the
+     legend dot, the row marker, the trade ticket. Kept in sync with
+     SERIES_COLORS in src/lib/chart.ts. */
+  --c-1: #3fb27f;
+  --c-2: #4d87f7;
+  --c-3: #e0b341;
+  --c-4: #c06bd9;
+  --c-5: #e15241;
+  --c-6: #3fc0d4;
+  --c-7: #e08a3c;
+  --c-8: #7d8ce8;
+}
+
+/* One rule, applied once. Everything below animates with tokens, so switching
+   the tokens off here switches the whole app off. Motion that carries meaning —
+   a spinner, a progress bar — is left alone deliberately. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur-base: 1ms;
+    --dur-slow: 1ms;
+    --dur-lazy: 1ms;
+    --rise: 0px;
+  }
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -111,6 +175,77 @@ textarea { resize: vertical; line-height: 1.45; }
 @keyframes mm-up   { from { transform: translateY(18px); opacity: 0 } to { transform: none; opacity: 1 } }
 @keyframes mm-in   { from { opacity: 0 } to { opacity: 1 } }
 @keyframes mm-pop  { from { transform: scale(.94); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes mm-rise { from { transform: translateY(var(--rise)); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes mm-sheen { from { background-position: -160% 0 } to { background-position: 260% 0 } }
+@keyframes mm-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+@keyframes mm-halo { 0% { transform: scale(1); opacity: .55 } 70%, 100% { transform: scale(2.6); opacity: 0 } }
+
+/* ── focus ────────────────────────────────────────────────────────────────────
+   One focus treatment for the whole app. `:focus-visible` only, so a mouse
+   click never paints a ring but a keyboard tab always does. */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--r-xs);
+}
+
+/* ── motion primitives ────────────────────────────────────────────────────────
+   Classes, not per-component CSS. If a screen wants motion it reaches for one
+   of these; if it needs something new, it belongs here rather than inline. */
+
+/* Anything clickable that should acknowledge the press. */
+.pressable { transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out); }
+.pressable:active:not(:disabled) { transform: scale(0.975); }
+
+/* A card that lifts under the cursor. */
+.liftable { transition: transform var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out); }
+.liftable:hover { transform: translateY(-2px); border-color: var(--line-3); box-shadow: var(--lift-2); }
+
+/* Entrance for a section. `.stagger > *` walks its children in behind it.
+   Both run once on mount: they are animations, not transitions, so a re-render
+   with the same DOM never replays them. */
+.enter { animation: mm-rise var(--dur-slow) var(--ease-out) both; }
+.stagger > * { animation: mm-rise var(--dur-slow) var(--ease-out) both; }
+.stagger > *:nth-child(1) { animation-delay: 0ms }
+.stagger > *:nth-child(2) { animation-delay: 40ms }
+.stagger > *:nth-child(3) { animation-delay: 80ms }
+.stagger > *:nth-child(4) { animation-delay: 120ms }
+.stagger > *:nth-child(5) { animation-delay: 160ms }
+.stagger > *:nth-child(6) { animation-delay: 200ms }
+.stagger > *:nth-child(n + 7) { animation-delay: 240ms }
+
+/* Loading placeholder. Shaped like the thing it stands in for, so the layout
+   does not jump when the real content lands. */
+.skeleton {
+  border-radius: var(--r-sm);
+  background: linear-gradient(100deg, var(--chip) 30%, var(--chip-hi) 50%, var(--chip) 70%);
+  background-size: 260% 100%;
+  animation: mm-sheen 1.4s linear infinite;
+  color: transparent;
+  user-select: none;
+}
+
+/* A live dot for anything currently trading. */
+.live { position: relative; display: inline-flex; width: 6px; height: 6px; border-radius: var(--r-full); background: var(--yes); flex: none; }
+.live::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  background: inherit; animation: mm-halo 2.2s var(--ease-out) infinite;
+}
+
+/* A number that should re-read when it changes. Bump the `key` in React to
+   restart it — that is the whole mechanism. */
+.tick { animation: mm-in var(--dur-slow) var(--ease-out); }
+.tick-up { animation: mm-in var(--dur-slow) var(--ease-out); color: var(--yes-hi); }
+.tick-down { animation: mm-in var(--dur-slow) var(--ease-out); color: var(--no-hi); }
+
+/* A bar whose width means something. Animating width is cheap here because the
+   bar is small and never inside a scrolling list of hundreds. */
+.meter { position: relative; height: 5px; border-radius: var(--r-full); background: var(--chip); overflow: hidden; }
+.meter > span {
+  display: block; height: 100%; border-radius: inherit;
+  background: var(--c-1);
+  transition: width var(--dur-slow) var(--ease-out);
+}
 
 /* ── primitives ───────────────────────────────────────────────────────────── */
 

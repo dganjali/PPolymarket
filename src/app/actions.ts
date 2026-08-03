@@ -37,9 +37,12 @@ import {
   setMemberRole,
   startNextSeason,
   transferOwnership,
+  requireAdmin,
   updateGroup,
 } from '@/lib/engine';
 import type { Side } from '@/lib/amm';
+import { applyPlan, provider } from '@/lib/billing';
+import { ORDER, PLANS, type PlanId } from '@/lib/plans';
 
 export interface FormState {
   error?: string;
@@ -546,5 +549,68 @@ export async function startNextSeasonAction(_prev: FormState, fd: FormData): Pro
     ok: close.champion
       ? `Season ${close.season} closed — ${close.champion.name} won. Season ${close.season + 1} is open.`
       : `Season ${close.season} closed. Season ${close.season + 1} is open.`,
+  };
+}
+
+// ─── billing ─────────────────────────────────────────────────────────────────
+
+/**
+ * Starts a checkout for a group.
+ *
+ * With no payment provider configured this applies the plan immediately and
+ * says so — see src/lib/billing.ts. With Stripe configured it returns a hosted
+ * checkout URL and the plan only moves when the webhook confirms payment.
+ */
+export async function upgradeGroupAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+
+  const plan = str(fd, 'plan') as PlanId;
+  if (!ORDER.includes(plan) || plan === 'free') return { error: 'Pick a plan.' };
+  const cadence = str(fd, 'cadence') === 'monthly' ? 'monthly' : 'annual';
+
+  const res = await guard(async () => {
+    await requireAdmin(user.id, group.id);
+    return provider.checkout({
+      groupId: group.id,
+      groupName: group.name,
+      plan,
+      cadence,
+      actorId: user.id,
+      email: user.email,
+      returnPath: `/g/${slug}/billing`,
+    });
+  });
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  const checkout = res as { url: string; simulated: boolean };
+  revalidatePath(`/g/${slug}`, 'layout');
+  if (checkout.simulated) {
+    return {
+      ok: `${PLANS[plan].name} is on — no card was charged, because no payment provider is configured.`,
+    };
+  }
+  redirect(checkout.url);
+}
+
+/** Drops a group back to Free. Nothing is deleted; see plans.ts. */
+export async function downgradeGroupAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+
+  const res = await guard(async () => {
+    await requireAdmin(user.id, group.id);
+    if (group.owner_id !== user.id) throw new AppError('Only the community owner can change the plan.');
+    await applyPlan(group.id, 'free', { actorId: user.id, reason: 'downgraded by owner' });
+  });
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  revalidatePath(`/g/${slug}`, 'layout');
+  return {
+    ok: 'Back on Free. Nobody was removed and no market was closed — you just cannot add more until you are under the limits.',
   };
 }

@@ -31,6 +31,8 @@ import {
 } from './data';
 import { money, shares as fmtShares, slugify, stamp } from './format';
 import { AppError } from './errors';
+import { outcomeLimit, requireFeature, requireMarketType, requireQuota } from './entitlements';
+import type { PlanFields } from './plans';
 
 export { AppError };
 
@@ -79,9 +81,13 @@ async function freshCode(): Promise<string> {
  */
 async function issueMembership(
   userId: number,
-  group: Pick<GroupRow, 'id' | 'current_season' | 'starting_balance'>,
+  group: Pick<GroupRow, 'id' | 'current_season' | 'starting_balance'> & PlanFields,
   role: 'admin' | 'member',
 ) {
+  // Every path that adds a person runs through here — a link, the public
+  // directory, an admin adding someone by hand, an approved join request — so
+  // the seat ceiling is enforced once, where it cannot be routed around.
+  await requireQuota(group, 'members');
   const alreadyGranted = !!(await get(
     'SELECT id FROM membership_grants WHERE user_id = ? AND group_id = ? AND season_number = ?',
     userId,
@@ -230,6 +236,8 @@ export async function createInvite(
   input: { label?: string; code?: string; expiresInHours?: number | null; maxUses?: number | null },
 ): Promise<InviteRow> {
   await requireAdmin(userId, groupId);
+  const inviteGroup = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
+  await requireQuota(inviteGroup, 'invites');
 
   let code: string;
   if (input.code?.trim()) {
@@ -525,6 +533,10 @@ export async function createMarket(userId: number, group: GroupRow, input: NewMa
   const question = input.question.trim();
   if (question.length < 8) fail('Write a question the group can actually settle.');
 
+  // Checked before the balance test on purpose: being told "not enough cash"
+  // when the real problem is the market ceiling sends people to the wrong fix.
+  await requireQuota(group, 'activeMarkets');
+
   const stake = Math.max(10, Math.min(500, input.funding || 25));
   if (ms.balance < stake) fail(`You need ${money(stake)} to seed this market.`);
 
@@ -535,10 +547,11 @@ export async function createMarket(userId: number, group: GroupRow, input: NewMa
   const funding = house + stake;
 
   const marketType = input.marketType === 'categorical' ? 'categorical' : 'binary';
+  requireMarketType(group, marketType);
   const labels = (input.options ?? [])
     .map((label) => label.trim().slice(0, 80))
     .filter((label, index, rows) => label.length >= 1 && rows.findIndex((candidate) => candidate.toLowerCase() === label.toLowerCase()) === index)
-    .slice(0, 8);
+    .slice(0, outcomeLimit(group));
   if (marketType === 'categorical' && labels.length < 2) fail('Add at least two distinct outcomes.');
   const price = marketType === 'binary' ? Math.max(0.03, Math.min(0.97, input.openPrice)) : 1 / labels.length;
   const r = marketType === 'binary' ? seedReserves(price, funding) : { yes: 0, no: 0 };
@@ -700,6 +713,9 @@ export async function setMemberRole(
   const group = await get<GroupRow>('SELECT * FROM groups WHERE id = ?', groupId) ?? fail('Group not found.');
   if (group.owner_id !== userId) fail('Only the community owner can change admin roles.');
   if (targetId === group.owner_id) fail('The owner must remain an admin.');
+  // Only promotion is capped. Demoting must always work, or a group that drops
+  // a tier could be stuck unable to get back under its own admin ceiling.
+  if (role === 'admin') await requireQuota(group, 'admins');
   await requireMember(targetId, groupId);
   const target = (await get<{ name: string }>('SELECT name FROM users WHERE id = ?', targetId))!;
   await tx(async () => {

@@ -20,7 +20,7 @@ export default async function StandingsPage({ params }: { params: Promise<{ slug
     : null;
 
   return (
-    <div className="wrap stack" style={{ maxWidth: 820 }}>
+    <div className="wrap narrow stack stagger">
       <div className="sec">
         <h1 className="h-title">Standings</h1>
         <span className="t-micro">
@@ -45,62 +45,59 @@ export default async function StandingsPage({ params }: { params: Promise<{ slug
         lastPlace={lastPlace && { name: lastPlace.name, avatar: lastPlace.avatar, total: lastPlace.total }}
       />
 
-      <section className="surface" style={{ padding: 'var(--s-2)' }}>
+      <section className="surface rows">
+        <div className="table-head">
+          <span>#</span>
+          <span>Member</span>
+          <span>Worth</span>
+          <span>Season</span>
+        </div>
         {rows.map((r, i) => (
-          <div key={r.userId} className={`row${r.userId === user.id ? ' row-me' : ''}`}>
-            <div className="mono" style={{ width: 18, fontSize: 'var(--t-small)', color: i === 0 ? 'var(--accent)' : 'var(--dim)' }}>
-              {i + 1}
-            </div>
-            <Avatar name={r.name} src={r.avatar} size={30} radius={9} />
-            <div className="row-main">
-              <div className="row-name">{r.name}</div>
-              <div className="row-sub">{r.openPositions ? `${r.openPositions} bets running` : 'nothing running'}</div>
-            </div>
-            <div className="row-figure">
-              {money0(r.total)}
-              <div className="t-micro" style={{ color: r.pnl >= 0 ? 'var(--yes-hi)' : 'var(--no-hi)', marginTop: 2 }}>
-                {signedMoney(r.pnl)}
-              </div>
-            </div>
+          <div key={r.userId} className="stand-row" data-me={r.userId === user.id} data-place={i + 1}>
+            <span className="stand-rank">{i + 1}</span>
+            <span className="stand-who">
+              <Avatar name={r.name} src={r.avatar} size={28} radius={9} />
+              <span className="stand-name">{r.name}</span>
+            </span>
+            <span className="stand-total">{money0(r.total)}</span>
+            <span className={`stand-pnl ${r.pnl >= 0 ? 'up' : 'down'}`}>{signedMoney(r.pnl)}</span>
           </div>
         ))}
       </section>
 
-      <p className="t-micro" style={{ lineHeight: 1.6, margin: 0 }}>
+      <p className="t-micro stand-note">
         Worth = the cash you are holding plus whatever your open bets are worth right now. Everyone
         started on {money0(group.starting_balance)}.
       </p>
 
       {seasons.length > 0 && (
-        <section className="stack-tight" style={{ marginTop: 'var(--s-3)' }}>
+        <section className="stack-tight past-seasons">
           <h2 className="h-head">Past seasons</h2>
           {seasons.map((season) => {
             const finishers = history.filter((row) => row.season_number === season.season_number);
             return (
-              <details key={season.id} className="surface" style={{ padding: 'var(--s-2) var(--s-3)' }}>
-                <summary style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)', cursor: 'pointer', listStyle: 'none' }}>
-                  <span className="mono" style={{ fontSize: 'var(--t-micro)', color: 'var(--accent)', width: 24 }}>
-                    S{season.season_number}
-                  </span>
+              <details key={season.id} className="surface season">
+                <summary className="season-summary">
+                  <span className="mono season-tag">S{season.season_number}</span>
                   {season.champion_name && (
                     <Avatar name={season.champion_name} src={season.champion_avatar} size={26} radius={8} />
                   )}
                   <span className="row-main">
                     <span className="row-name">{season.champion_name ?? 'No winner'}</span>
-                    <span className="row-sub" style={{ display: 'block' }}>
+                    <span className="row-sub season-when">
                       {longDateLabel(season.ended_at)} · {season.entrants} played
                     </span>
                   </span>
                   <span className="t-micro">open</span>
                 </summary>
-                <div style={{ marginTop: 'var(--s-2)', paddingTop: 'var(--s-2)', borderTop: '1px solid var(--line)' }}>
-                  {season.prize && <p className="t-small" style={{ margin: '0 0 var(--s-2)' }}>Won: {season.prize}</p>}
+                <div className="season-body">
+                  {season.prize && <p className="t-small season-prize">Won: {season.prize}</p>}
                   {finishers.map((row) => (
-                    <div key={row.user_id} className="row" style={{ padding: '6px var(--s-1)' }}>
-                      <span className="mono" style={{ width: 18, fontSize: 'var(--t-micro)', color: 'var(--dim)' }}>{row.rank}</span>
+                    <div key={row.user_id} className="row season-row">
+                      <span className="mono season-rank">{row.rank}</span>
                       <Avatar name={row.name} src={row.avatar} size={22} radius={7} />
-                      <span className="row-main t-small" style={{ color: 'var(--ink-2)' }}>{row.name}</span>
-                      <span className="mono" style={{ fontSize: 'var(--t-small)' }}>{money0(row.final_total)}</span>
+                      <span className="row-main t-small season-name">{row.name}</span>
+                      <span className="mono season-total">{money0(row.final_total)}</span>
                     </div>
                   ))}
                 </div>

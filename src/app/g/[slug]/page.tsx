@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { groupContext } from '@/lib/context';
-import { CATEGORIES, events, groupPrizes, marketsByGroup, membershipRequests, priceSeriesFor, standings } from '@/lib/data';
+import { CATEGORIES, events, groupPrizes, marketsByGroup, membershipRequests, standings } from '@/lib/data';
+import { sparkSeriesFor } from '@/lib/history';
 import { money0, relative, signedMoney } from '@/lib/format';
 import { MarketCard } from '@/components/MarketCard';
 import { Avatar } from '@/components/ui';
@@ -30,7 +31,7 @@ export default async function HomePage({
   const joinRequests = isAdmin ? await membershipRequests(group.id) : [];
 
   const markets = cat === 'All' ? all : all.filter((m) => m.category === cat);
-  const series = await priceSeriesFor(markets.map((m) => m.id));
+  const series = await sparkSeriesFor(markets);
   const catList = ['All', ...CATEGORIES.filter((c) => all.some((m) => m.category === c))];
 
   const rank = rows.findIndex((r) => r.userId === user.id) + 1;
@@ -107,7 +108,7 @@ export default async function HomePage({
 
       <section className="market-grid" style={{ display: 'grid', gap: 'var(--s-2)' }}>
         {markets.map((m) => (
-          <MarketCard key={m.id} market={m} series={series.get(m.id) ?? []} base={base} />
+          <MarketCard key={m.id} market={m} points={series.get(m.id) ?? []} base={base} />
         ))}
       </section>
 

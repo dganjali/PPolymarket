@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { AuthForm } from '@/components/AuthForm';
+import { AuthAside } from '@/components/AuthAside';
 import { currentUser, SESSION_MISCONFIGURED, sessionsConfigured } from '@/lib/auth';
 
 export default async function SignupPage({
@@ -11,8 +12,9 @@ export default async function SignupPage({
   const { next, error } = await searchParams;
 
   return (
-    <main className="auth" style={{ gap: 26 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+    <main className="auth-shell">
+      <div className="auth">
+      <div className="auth-head">
         <div className="logo">M</div>
         <div>
           <div className="display">
@@ -20,7 +22,7 @@ export default async function SignupPage({
             <br />
             markets.
           </div>
-          <div className="lede" style={{ marginTop: 8 }}>
+          <div className="lede auth-lede">
             Invite-only groups, fake bankrolls, real odds. Pick a handle your group will recognise.
           </div>
         </div>
@@ -32,6 +34,8 @@ export default async function SignupPage({
         externalError={error === 'google_failed' ? 'Google sign-in could not be completed. Please try again.' : undefined}
         configError={sessionsConfigured() ? undefined : SESSION_MISCONFIGURED}
       />
+      </div>
+      <AuthAside />
     </main>
   );
 }

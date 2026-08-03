@@ -4,6 +4,11 @@ import { dirname, resolve } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import postgres, { type Sql } from 'postgres';
 import { AppError } from './errors';
+import { PLANS } from './plans';
+
+// The free ceilings, read from the plan definitions so the two cannot drift.
+const FREE_MEMBERS = PLANS.free.limits.members;
+const FREE_MARKETS = PLANS.free.limits.activeMarkets;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -272,6 +277,17 @@ CREATE TABLE IF NOT EXISTS season_results (
 );
 CREATE INDEX IF NOT EXISTS idx_season_results_group ON season_results(group_id, season_number, rank);
 
+CREATE TABLE IF NOT EXISTS plan_changes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id    INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  actor_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  from_plan   TEXT NOT NULL,
+  to_plan     TEXT NOT NULL,
+  reason      TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_plan_changes_group ON plan_changes(group_id, id DESC);
+
 CREATE TABLE IF NOT EXISTS seasons (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id      INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
@@ -321,6 +337,26 @@ const ADDITIONS: [table: string, column: string, ddl: string][] = [
   ['markets', 'dispute_ends_at', 'TEXT'],
   ['markets', 'season_number', 'INTEGER NOT NULL DEFAULT 1'],
   ['trades', 'option_id', 'INTEGER'],
+
+  // Plans and entitlements. A group carries its own plan; `plan_status` is what
+  // the billing provider last told us, and the two `*_override` columns are how
+  // a group already over a limit on the day limits shipped keeps what it had.
+  ['groups', 'plan', "TEXT NOT NULL DEFAULT 'free'"],
+  ['groups', 'plan_status', "TEXT NOT NULL DEFAULT 'active'"],
+  ['groups', 'plan_period_end', 'TEXT'],
+  ['groups', 'plan_since', 'TEXT'],
+  ['groups', 'seat_limit_override', 'INTEGER'],
+  ['groups', 'market_limit_override', 'INTEGER'],
+  ['groups', 'grandfathered_at', 'TEXT'],
+  // Billing. `stub` until a real provider is configured; see src/lib/billing.ts.
+  ['groups', 'billing_provider', "TEXT NOT NULL DEFAULT 'stub'"],
+  ['groups', 'billing_customer_id', 'TEXT'],
+  ['groups', 'billing_subscription_id', 'TEXT'],
+  ['groups', 'billing_email', 'TEXT'],
+  // Paid customization.
+  ['groups', 'brand_accent', "TEXT NOT NULL DEFAULT ''"],
+  ['groups', 'hide_badge', 'INTEGER NOT NULL DEFAULT 0'],
+  ['groups', 'email_domain_lock', "TEXT NOT NULL DEFAULT ''"],
 ];
 
 /**
@@ -340,6 +376,33 @@ const SEASON_BACKFILL = `(group_id, season_number, started_at, ended_at, entrant
 /** The single free-text prize predates ranked places; it becomes first place. */
 const PRIZE_BACKFILL = `(group_id, place, label)
   SELECT id, 1, prize FROM groups WHERE prize <> ''`;
+
+const LIVE = "('pending', 'open', 'closed', 'resolving')";
+
+/**
+ * Grandfathering, run once per group.
+ *
+ * Plans arrived after these groups did. A community that already had forty
+ * members and nine live markets must never open the app to a wall telling it
+ * that it is over a limit it agreed to before the limit existed — so on the
+ * first run after the plan columns land, anything already above the free
+ * ceiling has its current size written into an override, permanently.
+ *
+ * `limitsFor()` takes the larger of the plan limit and the override, so these
+ * groups keep exactly what they had and simply cannot grow past it without
+ * upgrading. Nothing is removed, and the clause is idempotent: once
+ * `grandfathered_at` is set, the row is never touched again.
+ */
+const GRANDFATHER = `UPDATE groups SET
+    grandfathered_at = datetime('now'),
+    seat_limit_override = (SELECT COUNT(*) FROM memberships m WHERE m.group_id = groups.id),
+    market_limit_override = (SELECT COUNT(*) FROM markets k
+       WHERE k.group_id = groups.id AND k.season_number = groups.current_season AND k.status IN ${LIVE})
+  WHERE grandfathered_at IS NULL AND plan = 'free' AND (
+    (SELECT COUNT(*) FROM memberships m WHERE m.group_id = groups.id) > ${FREE_MEMBERS}
+    OR (SELECT COUNT(*) FROM markets k
+         WHERE k.group_id = groups.id AND k.season_number = groups.current_season AND k.status IN ${LIVE}) > ${FREE_MARKETS}
+  )`;
 
 function migrate(db: DatabaseSync) {
   for (const [table, column, ddl] of ADDITIONS) {
@@ -361,6 +424,7 @@ function migrate(db: DatabaseSync) {
              FROM memberships ms JOIN groups g ON g.id = ms.group_id`);
   db.exec(`INSERT OR IGNORE INTO seasons ${SEASON_BACKFILL}`);
   db.exec(`INSERT OR IGNORE INTO group_prizes ${PRIZE_BACKFILL}`);
+  db.exec(GRANDFATHER);
 }
 
 function open(): DatabaseSync {
@@ -457,6 +521,7 @@ async function bootstrapPostgres(): Promise<void> {
     );
     await sql.unsafe(`INSERT INTO seasons ${SEASON_BACKFILL} ON CONFLICT DO NOTHING`);
     await sql.unsafe(`INSERT INTO group_prizes ${PRIZE_BACKFILL} ON CONFLICT DO NOTHING`);
+    await sql.unsafe(GRANDFATHER.replace(/datetime\('now'\)/g, pgNow));
   });
 }
 

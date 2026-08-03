@@ -11,6 +11,7 @@ import { solidAvatar } from './avatar';
 import {
   announce,
   buy,
+  buyCategorical,
   createGroup,
   createInvite,
   createMarket,
@@ -140,6 +141,54 @@ const MARKETS: Spec[] = [
   },
 ];
 
+/** A multiple-choice market, so the demo has one of every market type. */
+const RACE = {
+  by: 'elena',
+  question: 'Who wins class president?',
+  category: 'School',
+  rules:
+    'Resolves to whoever the office announces as the winner. A runoff resolves to the runoff winner; a withdrawal before the vote resolves to whoever actually wins.',
+  days: 21,
+  funding: 75,
+  options: ['Priya Raman', 'Marcus Webb', 'Kai Ito', 'Nobody runs unopposed'],
+  /** Where the group lands by the end of the simulation, per outcome. */
+  target: [0.46, 0.29, 0.19, 0.06],
+  trades: 34,
+};
+
+async function simulateCategorical(
+  marketId: number,
+  optionIds: number[],
+  traders: number[],
+  target: number[],
+  count: number,
+) {
+  for (let i = 0; i < count; i++) {
+    // Draw an outcome roughly in proportion to where the crowd ends up, so the
+    // lines separate over time instead of jittering around an even split.
+    const roll = rand();
+    let cumulative = 0;
+    let choice = 0;
+    for (let k = 0; k < target.length; k++) {
+      cumulative += target[k];
+      if (roll <= cumulative) {
+        choice = k;
+        break;
+      }
+      choice = k;
+    }
+    const amount = Math.round(5 + rand() * rand() * 90);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await buyCategorical(pick(traders), marketId, optionIds[choice], amount);
+        break;
+      } catch {
+        /* broke — ask someone else */
+      }
+    }
+  }
+}
+
 const heldBy = (marketId: number, userId: number) =>
   db
     .prepare('SELECT yes_shares, no_shares FROM positions WHERE market_id = ? AND user_id = ?')
@@ -189,6 +238,146 @@ async function simulate(marketId: number, traders: number[], target: number, cou
   }
 }
 
+const sql = (text: string, ...params: unknown[]) => db.prepare(text).run(...(params as never[]));
+
+const asStamp = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+
+/**
+ * Spreads the demo's history back across real calendar time.
+ *
+ * Everything above runs through the real engine, which stamps every row
+ * `datetime('now')` — so a seed that takes four seconds produces a market whose
+ * entire life happened in four seconds. That is invisible on a chart plotted by
+ * sample index, which is what the old one did, and fatal on a chart plotted
+ * against time: every point lands in the same pixel column.
+ *
+ * So after the simulation, each market's rows are restamped across its lifetime,
+ * in the order they were written. Nothing about the *state* changes — balances,
+ * reserves and positions are whatever the engine computed. Only when it happened
+ * moves, which is the one thing a four-second simulation cannot get right.
+ */
+function backdate() {
+  const markets = db
+    .prepare('SELECT id, created_at, status, resolved_at FROM markets ORDER BY id')
+    .all() as { id: number; created_at: string; status: string; resolved_at: string | null }[];
+
+  const now = Date.now();
+
+  markets.forEach((market, index) => {
+    // Staggered ages, so the group's markets did not all open on one afternoon.
+    const ageDays = 34 - (index % 6) * 4.5;
+    const opened = now - ageDays * 86_400_000;
+    // Resolved markets stop generating history when they settle.
+    const ends = market.status === 'resolved' ? now - 2 * 86_400_000 : now - 40 * 60_000;
+
+    sql('UPDATE markets SET created_at = ? WHERE id = ?', asStamp(opened), market.id);
+    if (market.resolved_at) sql('UPDATE markets SET resolved_at = ? WHERE id = ?', asStamp(ends), market.id);
+
+    const trades = db
+      .prepare('SELECT id FROM trades WHERE market_id = ? ORDER BY id')
+      .all(market.id) as { id: number }[];
+
+    // Trading picks up as a market ages: the curve pushes samples toward the
+    // right, which is what a market people are still arguing about looks like.
+    const stamps = trades.map((_, i) => {
+      const share = (i + 1) / (trades.length + 1);
+      const eased = Math.pow(share, 0.72);
+      const jitter = (rand() - 0.5) * (0.9 / (trades.length + 1));
+      return opened + (ends - opened) * Math.min(0.999, Math.max(0.001, eased + jitter));
+    });
+    stamps.sort((a, b) => a - b);
+
+    trades.forEach((trade, i) => sql('UPDATE trades SET created_at = ? WHERE id = ?', asStamp(stamps[i]), trade.id));
+
+    // A price point is written with the trade that caused it, after an opening
+    // point at creation — so they pair off one behind the trades.
+    const points = db
+      .prepare('SELECT id FROM price_points WHERE market_id = ? ORDER BY id')
+      .all(market.id) as { id: number }[];
+    points.forEach((point, i) =>
+      sql(
+        'UPDATE price_points SET created_at = ? WHERE id = ?',
+        asStamp(i === 0 ? opened : (stamps[i - 1] ?? ends) + 1000),
+        point.id,
+      ),
+    );
+
+    // A categorical trade repoints *every* outcome at once, so option price
+    // points arrive one block per trade, a block being as wide as the outcome
+    // list. The first block is the opening split written at creation.
+    const outcomes = (
+      db.prepare('SELECT COUNT(*) AS n FROM market_options WHERE market_id = ?').get(market.id) as { n: number }
+    ).n;
+    if (outcomes > 0) {
+      const optionPoints = db
+        .prepare(
+          `SELECT p.id FROM option_price_points p
+             JOIN market_options o ON o.id = p.option_id
+            WHERE o.market_id = ? ORDER BY p.id`,
+        )
+        .all(market.id) as { id: number }[];
+      optionPoints.forEach((point, i) => {
+        const block = Math.floor(i / outcomes);
+        sql(
+          'UPDATE option_price_points SET created_at = ? WHERE id = ?',
+          asStamp(block === 0 ? opened : (stamps[block - 1] ?? ends) + 1000),
+          point.id,
+        );
+      });
+    }
+
+    // Talk follows the market, spread over the back half of its life.
+    const thread = db
+      .prepare('SELECT id FROM comments WHERE market_id = ? ORDER BY id')
+      .all(market.id) as { id: number }[];
+    thread.forEach((comment, i) =>
+      sql(
+        'UPDATE comments SET created_at = ? WHERE id = ?',
+        asStamp(opened + (ends - opened) * (0.45 + (0.5 * (i + 1)) / (thread.length + 1))),
+        comment.id,
+      ),
+    );
+
+    // The market's own lifecycle: it was proposed and opened at the start, and
+    // settled at the end. Trade events ride along with their trade.
+    sql(
+      `UPDATE events SET created_at = ? WHERE market_id = ? AND kind IN ('market', 'proposal')`,
+      asStamp(opened),
+      market.id,
+    );
+    sql(
+      `UPDATE events SET created_at = ? WHERE market_id = ? AND kind IN ('resolve', 'dispute')`,
+      asStamp(ends),
+      market.id,
+    );
+    const tradeEvents = db
+      .prepare(`SELECT id FROM events WHERE market_id = ? AND kind = 'trade' ORDER BY id`)
+      .all(market.id) as { id: number }[];
+    tradeEvents.forEach((event, i) =>
+      sql('UPDATE events SET created_at = ? WHERE id = ?', asStamp(stamps[i] ?? ends), event.id),
+    );
+  });
+
+  // Notifications ride with whatever caused them: a market notification takes
+  // its market's opening moment, everything else lands on the group's timeline.
+  for (const market of markets) {
+    sql(
+      `UPDATE notifications SET created_at = (SELECT created_at FROM markets WHERE id = ?) WHERE market_id = ?`,
+      market.id,
+      market.id,
+    );
+  }
+
+  // Group-level history predates every market in it.
+  const earliest = db.prepare('SELECT MIN(created_at) AS t FROM markets').get() as { t: string };
+  sql(
+    `UPDATE events SET created_at = ? WHERE market_id IS NULL AND kind IN ('group', 'join')`,
+    earliest.t,
+    );
+  sql('UPDATE groups SET created_at = ?, season_started_at = ?', earliest.t, earliest.t);
+  sql('UPDATE memberships SET joined_at = ?', earliest.t);
+}
+
 async function main() {
   await reset();
 
@@ -199,7 +388,7 @@ async function main() {
   const id = (h: string) => users.get(h)!;
 
   const seasonEnds = new Date(Date.now() + 42 * 86_400_000).toISOString().slice(0, 10);
-  const group = await createGroup(id('dawson'), {
+  let group = await createGroup(id('dawson'), {
     name: "Ridgeview Class of '26",
     startingBalance: 2500,
     marketLiquidity: 600,
@@ -211,6 +400,18 @@ async function main() {
     // is the one that shows the approval queue.
     requireMemberApproval: false,
   });
+
+  // The demo group runs on Pro so the seed can show off every market type and
+  // more than the free tier's four live markets at once. The debate league
+  // below stays on Free deliberately — between them the two groups show both
+  // sides of the paywall without anyone having to go and change a setting.
+  await run(
+    "UPDATE groups SET plan = 'pro', plan_status = 'active', plan_since = datetime('now'), billing_provider = 'stub' WHERE id = ?",
+    group.id,
+  );
+  // Re-read it: createGroup handed back the row as it was before the upgrade,
+  // and createMarket reads the plan off the row it is given.
+  group = (await groupBySlug(group.slug))!;
 
   for (const [handle] of PEOPLE) {
     if (handle !== 'dawson') await joinGroup(id(handle), group.invite_code);
@@ -233,6 +434,28 @@ async function main() {
     await run("UPDATE markets SET status = 'open' WHERE id = ?", market.id);
     await simulate(market.id, everyone, spec.target, spec.trades);
   }
+
+  // The multiple-choice market, which is what the chart's several-lines view and
+  // the outcome list on the market page are actually built for.
+  const race = await createMarket(id(RACE.by), group, {
+    question: RACE.question,
+    category: RACE.category,
+    rules: RACE.rules,
+    closesAt: at(RACE.days),
+    openPrice: 0.5,
+    funding: RACE.funding,
+    marketType: 'categorical',
+    options: RACE.options,
+  });
+  await run("UPDATE markets SET status = 'open' WHERE id = ?", race.id);
+  const raceOptions = (
+    db.prepare('SELECT id FROM market_options WHERE market_id = ? ORDER BY sort_order').all(race.id) as {
+      id: number;
+    }[]
+  ).map((option) => option.id);
+  await simulateCategorical(race.id, raceOptions, everyone, RACE.target, RACE.trades);
+  await postComment(id('kai'), race.id, 'Marcus has the whole robotics team and nobody is pricing that in.');
+  await postComment(id('priya'), race.id, 'I have posters. Posters are a moat.');
 
   // One market that already ran its course, so the settled tab has something.
   const past = await createMarket(id('dawson'), group, {
@@ -338,6 +561,8 @@ async function main() {
   // Screening is on from season two, so newcomers land in the approval queue.
   await updateGroup(id('priya'), league.id, { require_member_approval: 1 });
   await joinGroup(id('owen'), league.invite_code);
+
+  backdate();
 
   const fresh = (await groupBySlug(group.slug))!;
   const freshLeague = (await groupBySlug(league.slug))!;

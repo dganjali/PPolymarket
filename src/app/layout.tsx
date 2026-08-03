@@ -1,5 +1,12 @@
 import type { Metadata, Viewport } from 'next';
+// Tokens and primitives first; the rest cascade over them in load order.
 import './globals.css';
+import './shell.css';
+import './market.css';
+import './screens.css';
+import './account.css';
+import './admin.css';
+import './premium.css';
 
 export const metadata: Metadata = {
   title: 'Minimarket — private prediction markets',

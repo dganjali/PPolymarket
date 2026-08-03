@@ -1,0 +1,151 @@
+/* placeholder — owned by the screens package */
+
+/* ── market card ──────────────────────────────────────────────────────────── */
+
+.mc {
+  display: flex; flex-direction: column; gap: var(--s-2);
+  padding: var(--s-3); border-radius: var(--r-md);
+  background: var(--card); border: 1px solid var(--line-2);
+}
+.mc-link { display: flex; flex-direction: column; gap: var(--s-3); flex: 1; }
+
+.mc-top { display: flex; align-items: flex-start; gap: 11px; }
+.mc-headline { flex: 1; min-width: 0; }
+.mc-meta {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 9.5px;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim);
+}
+.mc-q {
+  margin: 7px 0 0;
+  font-size: 16.5px; font-weight: 600; line-height: 1.28; letter-spacing: -0.015em;
+  text-wrap: pretty;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.mc-figure { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s-3); }
+.mc-spark { opacity: 0.9; }
+.mc-numbers { text-align: right; }
+.mc-pct {
+  font-size: 24px; font-weight: 600; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.mc-delta { font-size: var(--t-micro); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+.mc-outcomes { display: flex; flex-direction: column; gap: 8px; }
+.mc-outcome { display: flex; align-items: center; gap: 10px; }
+.mc-outcome-label {
+  flex: 1; min-width: 0; font-size: var(--t-small); color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mc-outcome-meter { width: 92px; flex: none; }
+.mc-outcome-pct {
+  width: 34px; text-align: right; font-size: var(--t-small);
+  font-variant-numeric: tabular-nums; color: var(--ink-2);
+}
+.mc-more { font-size: var(--t-micro); color: var(--dim-2); }
+
+.mc-buys { display: flex; gap: 8px; }
+.mc-buy {
+  flex: 1; padding: 11px; border-radius: var(--r-sm);
+  text-align: center; font-size: var(--t-small); font-weight: 600;
+}
+.mc-buy b { font-weight: 600; }
+.mc-buy-wide {
+  background: var(--chip); border: 1px solid var(--line-2); color: var(--ink-3);
+}
+.mc-buy-wide:hover { background: var(--chip-hi); color: var(--ink); }
+.mc-closed {
+  padding: 11px; border-radius: var(--r-sm); background: var(--sunken);
+  text-align: center; font-size: var(--t-small); color: var(--dim);
+}
+
+/* ── shared list rows ─────────────────────────────────────────────────────── */
+
+.rows { padding: var(--s-2); }
+.rows .row { transition: background var(--dur-base) var(--ease-out); }
+.rows a.row:hover { background: var(--chip); }
+.row-empty { margin: 0; padding: var(--s-2); }
+.ink-link { color: var(--accent); }
+.ink-link:hover { color: var(--accent-hi); }
+
+.leg-q {
+  font-size: var(--t-small); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.leg-move { margin-top: 2px; font-variant-numeric: tabular-nums; }
+.leg-realized { font-size: var(--t-small); font-variant-numeric: tabular-nums; }
+
+/* ── you ──────────────────────────────────────────────────────────────────── */
+
+.worth-total {
+  margin-top: 4px;
+  font-size: var(--t-display); font-weight: 600; letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.worth-pnl { margin-top: 2px; font-size: var(--t-small); font-variant-numeric: tabular-nums; }
+.worth-split {
+  display: flex; gap: var(--s-3);
+  margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--line);
+}
+.worth-stat { flex: 1; min-width: 0; }
+.worth-stat-value {
+  margin-top: 3px; font-size: var(--t-head); font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── standings ────────────────────────────────────────────────────────────── */
+
+.table-head {
+  display: grid; grid-template-columns: 30px 1fr auto auto;
+  gap: var(--s-2); padding: 0 var(--s-2) 8px;
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--dim-2);
+}
+.table-head > :nth-child(3), .table-head > :nth-child(4) { text-align: right; }
+
+.stand-row {
+  display: grid; grid-template-columns: 30px 1fr auto auto;
+  align-items: center; gap: var(--s-2);
+  padding: 10px var(--s-2); border-radius: var(--r-sm);
+  transition: background var(--dur-base) var(--ease-out);
+}
+.stand-row + .stand-row { border-top: 1px solid var(--line); border-radius: 0; }
+.stand-row:hover { background: var(--chip); }
+.stand-row[data-me='true'] { background: var(--accent-bg); }
+.stand-rank {
+  font-family: var(--mono); font-size: var(--t-small); font-weight: 600;
+  color: var(--dim); font-variant-numeric: tabular-nums;
+}
+.stand-row[data-place='1'] .stand-rank { color: var(--c-3); }
+.stand-who { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.stand-name {
+  font-size: var(--t-body); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stand-total {
+  font-family: var(--mono); font-size: var(--t-body); font-weight: 600;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.stand-pnl {
+  font-family: var(--mono); font-size: var(--t-small);
+  font-variant-numeric: tabular-nums; text-align: right; min-width: 68px;
+}
+
+.stand-note { line-height: 1.6; margin: 0; }
+
+.past-seasons { margin-top: var(--s-3); }
+.season { padding: var(--s-2) var(--s-3); }
+.season-summary {
+  display: flex; align-items: center; gap: var(--s-2);
+  cursor: pointer; list-style: none;
+}
+.season-summary::-webkit-details-marker { display: none; }
+.season-tag { font-size: var(--t-micro); color: var(--accent); width: 24px; flex: none; }
+.season-when { display: block; }
+.season-body { margin-top: var(--s-2); padding-top: var(--s-2); border-top: 1px solid var(--line); }
+.season-prize { margin: 0 0 var(--s-2); }
+.season-row { padding: 6px var(--s-1); }
+.season-rank { width: 18px; font-size: var(--t-micro); color: var(--dim); }
+.season-name { color: var(--ink-2); }
+.season-total { font-size: var(--t-small); font-variant-numeric: tabular-nums; }

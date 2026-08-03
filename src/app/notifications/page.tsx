@@ -1,70 +1,96 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { revalidatePath } from 'next/cache';
-import { markNotificationsRead } from '@/lib/engine';
 import { currentUser } from '@/lib/auth';
 import { notifications, unreadNotificationCount } from '@/lib/data';
 import { relative } from '@/lib/format';
+import { Bell, Check, Chevron, Shield, Sparkle, Trophy } from '@/components/Icon';
+import { MarkRead } from '@/components/MarkRead';
+
+/**
+ * One glyph per notification kind, so the inbox is scannable without reading.
+ * Keys are the exact `kind` values engine.ts writes.
+ */
+const KIND_ICONS: Record<string, (props: { size?: number }) => React.ReactElement> = {
+  market: Sparkle,
+  resolution: Trophy,
+  member: Check,
+  admin: Shield,
+  role: Shield,
+  season: Trophy,
+  announcement: Bell,
+};
+
+/** Day headings, so a busy week does not read as one undifferentiated list. */
+function dayOf(iso: string): string {
+  const at = new Date(`${iso.replace(' ', 'T')}Z`);
+  const today = new Date();
+  const days = Math.floor((today.setHours(0, 0, 0, 0) - new Date(at).setHours(0, 0, 0, 0)) / 86_400_000);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days} days ago`;
+  return at.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+}
 
 export default async function NotificationsPage() {
   const user = await currentUser();
   if (!user) redirect('/login?next=/notifications');
   const [items, unread] = await Promise.all([notifications(user.id), unreadNotificationCount(user.id)]);
-  // Opening this page is reading them; leaving the badge up afterwards just
-  // makes people click it again looking for something new.
-  if (unread > 0) {
-    await markNotificationsRead(user.id);
-    revalidatePath('/', 'layout');
+
+  // Group by day in one pass, keeping the order the query returned.
+  const days: { label: string; items: typeof items }[] = [];
+  for (const item of items) {
+    const label = dayOf(item.created_at);
+    const bucket = days[days.length - 1];
+    if (bucket && bucket.label === label) bucket.items.push(item);
+    else days.push({ label, items: [item] });
   }
 
   return (
-    <main className="account">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Link href="/groups" className="btn btn-ghost btn-sm">←</Link>
-        <div style={{ flex: 1 }}>
-          <div className="display" style={{ fontSize: 25 }}>Notifications</div>
-          <div className="mono" style={{ fontSize: 10, color: 'var(--dim)', marginTop: 3 }}>
-            {unread ? `${unread} new` : 'all caught up'}
-          </div>
+    <main className="account stack stagger">
+      {/* Opening this page is reading them; the badge comes down with it. */}
+      <MarkRead unread={unread} />
+
+      <header className="inbox-head">
+        <Link href="/groups" className="btn btn-ghost btn-sm pressable icon-btn" aria-label="Back to your groups">
+          <Chevron dir="left" size={16} />
+        </Link>
+        <div>
+          <h1 className="h-title">Notifications</h1>
+          <div className="mono t-micro inbox-count">{unread ? `${unread} new` : 'all caught up'}</div>
         </div>
+      </header>
 
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {items.map((item) => {
-          const href = item.group_slug
-            ? item.market_id
-              ? `/g/${item.group_slug}/m/${item.market_id}`
-              : `/g/${item.group_slug}`
-            : '/';
-          return (
-            <Link
-              key={item.id}
-              href={href}
-              className="card"
-              style={{ padding: 13, display: 'flex', gap: 10, borderColor: item.read_at ? undefined : 'var(--gold-line)' }}
-            >
-              <span
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: 99,
-                  marginTop: 5,
-                  flex: 'none',
-                  background: item.read_at ? 'var(--line-3)' : 'var(--gold)',
-                }}
-              />
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ display: 'block', fontSize: 13, lineHeight: 1.45 }}>{item.body}</span>
-                <span className="mono" style={{ display: 'block', fontSize: 9.5, color: 'var(--dim-2)', marginTop: 5 }}>
-                  {item.group_name ? `${item.group_name} · ` : ''}{relative(item.created_at)}
+      {days.map((day) => (
+        <section key={day.label} className="stack-tight">
+          <div className="inbox-day">{day.label}</div>
+          {day.items.map((item) => {
+            const href = item.group_slug
+              ? item.market_id
+                ? `/g/${item.group_slug}/m/${item.market_id}`
+                : `/g/${item.group_slug}`
+              : '/';
+            const Icon = KIND_ICONS[item.kind] ?? Bell;
+            return (
+              <Link key={item.id} href={href} className="inbox-row liftable" data-unread={!item.read_at}>
+                <span className="inbox-icon">
+                  <Icon size={15} />
                 </span>
-              </span>
-            </Link>
-          );
-        })}
-        {items.length === 0 && <div className="empty">Nothing yet. Market reviews and admin actions will show up here.</div>}
-      </div>
+                <span className="inbox-main">
+                  <span className="inbox-body">{item.body}</span>
+                  <span className="mono inbox-meta">
+                    {item.group_name ? `${item.group_name} · ` : ''}
+                    {relative(item.created_at)}
+                  </span>
+                </span>
+              </Link>
+            );
+          })}
+        </section>
+      ))}
+
+      {items.length === 0 && (
+        <div className="empty">Nothing yet. Market reviews and admin actions will show up here.</div>
+      )}
     </main>
   );
 }

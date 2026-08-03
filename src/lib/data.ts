@@ -22,6 +22,23 @@ export interface GroupRow {
   season_started_at: string;
   visibility: 'public' | 'private';
   description: string;
+
+  // Plan and entitlements. Read through src/lib/plans.ts rather than directly:
+  // `plan` is what was bought, `planOf()` is what the group is entitled to now.
+  plan: string;
+  plan_status: string;
+  plan_period_end: string | null;
+  plan_since: string | null;
+  seat_limit_override: number | null;
+  market_limit_override: number | null;
+  grandfathered_at: string | null;
+  billing_provider: string;
+  billing_customer_id: string | null;
+  billing_subscription_id: string | null;
+  billing_email: string | null;
+  brand_accent: string;
+  hide_badge: number;
+  email_domain_lock: string;
 }
 
 export interface MarketRow {
