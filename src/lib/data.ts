@@ -357,6 +357,45 @@ export async function priceSeriesFor(marketIds: number[], limit = 16): Promise<M
   return out;
 }
 
+export interface OptionPriceHistory {
+  option_id: number;
+  prices: number[];
+  timestamps: string[];
+}
+
+/**
+ * The last `limit` probability snapshots for every outcome in a categorical
+ * market. Each trade records all outcomes, so their arrays line up by index.
+ * Reading at most eight rows per snapshot matches the market's eight-outcome
+ * cap and keeps the query portable across SQLite and Postgres.
+ */
+export async function optionPriceHistory(marketId: number, limit = 60): Promise<OptionPriceHistory[]> {
+  const safeLimit = Math.max(1, Math.min(200, Math.round(limit)));
+  const rows = await all<{ option_id: number; price: number; created_at: string }>(
+    `SELECT p.option_id, p.price, p.created_at
+       FROM option_price_points p
+       JOIN market_options o ON o.id = p.option_id
+      WHERE o.market_id = ?
+      ORDER BY p.id DESC LIMIT ?`,
+    marketId,
+    safeLimit * 8,
+  );
+
+  const grouped = new Map<number, { prices: number[]; timestamps: string[] }>();
+  for (const row of rows.reverse()) {
+    const history = grouped.get(row.option_id) ?? { prices: [], timestamps: [] };
+    history.prices.push(row.price);
+    history.timestamps.push(row.created_at);
+    grouped.set(row.option_id, history);
+  }
+
+  return [...grouped.entries()].map(([option_id, history]) => ({
+    option_id,
+    prices: history.prices.slice(-safeLimit),
+    timestamps: history.timestamps.slice(-safeLimit),
+  }));
+}
+
 export interface PositionRow {
   id: number;
   market_id: number;

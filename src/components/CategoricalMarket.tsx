@@ -8,6 +8,7 @@ import {
   marketRestrictionFor,
   marketRestrictions,
   marketTraderCount,
+  optionPriceHistory,
   optionHolders,
   optionPositionFor,
   optionsWithPrices,
@@ -18,6 +19,7 @@ import { AdminMarketControls } from './AdminControls';
 import { CategoricalTradePanel } from './CategoricalTradePanel';
 import { CommentBox } from './CommentBox';
 import { ConflictNotice } from './ConflictNotice';
+import { MultiPriceChart } from './Chart';
 import { DisputeForm } from './DisputeForm';
 import { Avatar } from './ui';
 
@@ -38,9 +40,10 @@ export async function CategoricalMarket({
   membership: MembershipRow;
   isAdmin: boolean;
 }) {
-  const [rawOptions, positions, disputes, myDispute, thread, trades, restrictions, myRestriction, traderCount] =
+  const [rawOptions, history, positions, disputes, myDispute, thread, trades, restrictions, myRestriction, traderCount] =
     await Promise.all([
       optionsWithPrices(market),
+      optionPriceHistory(market.id, 60),
       optionPositionFor(user.id, market.id),
       market.status === 'resolving' ? marketDisputes(market.id) : Promise.resolve([]),
       market.status === 'resolving' ? disputeFor(user.id, market.id) : Promise.resolve(undefined),
@@ -60,6 +63,7 @@ export async function CategoricalMarket({
         : option.price,
   }));
   const displayedPercentages = wholePercentages(options.map((option) => option.price));
+  const historyByOption = new Map(history.map((item) => [item.option_id, item]));
   const held = Object.fromEntries(positions.map((position) => [position.option_id, position.shares]));
   const reviewOpen =
     !!market.dispute_ends_at && new Date(`${market.dispute_ends_at.replace(' ', 'T')}Z`).getTime() > Date.now();
@@ -137,6 +141,18 @@ export async function CategoricalMarket({
           )}
 
           <ConflictNotice restrictions={restrictions} isRestricted={!!myRestriction} />
+
+          <div className="panel" style={{ padding: '12px 10px 10px' }}>
+            <div className="eyebrow" style={{ marginBottom: 10 }}>Probability history</div>
+            <MultiPriceChart
+              series={options.map((option) => ({
+                id: option.id,
+                label: option.label,
+                prices: historyByOption.get(option.id)?.prices ?? [option.price],
+                timestamps: historyByOption.get(option.id)?.timestamps ?? [],
+              }))}
+            />
+          </div>
 
           <div className="panel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>

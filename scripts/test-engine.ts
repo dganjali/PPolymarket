@@ -56,6 +56,7 @@ const {
   latestSeason,
   marketById,
   marketOptions,
+  optionPriceHistory,
   optionsWithPrices,
   priceHistory,
   standings,
@@ -512,6 +513,17 @@ try {
   ok((await optionsWithPrices(freshElection)).find((option) => option.id === avaOption.id)!.price > 1 / 3, 'buying a candidate raises that candidate’s probability');
   const electionPosition = (await get<{ shares: number }>('SELECT shares FROM option_positions WHERE option_id = ? AND user_id = ?', avaOption.id, a.id))!;
   await sellCategorical(a.id, election.id, avaOption.id, electionPosition.shares / 4);
+  const electionHistory = await optionPriceHistory(election.id);
+  ok(electionHistory.length === electionOptions.length, 'categorical history includes every outcome');
+  ok(electionHistory.every((item) => item.prices.length >= 4), 'categorical history records creation, buys, and sells');
+  const snapshotCount = Math.min(...electionHistory.map((item) => item.prices.length));
+  for (let index = 0; index < snapshotCount; index++) {
+    close(
+      electionHistory.reduce((sum, item) => sum + item.prices[index], 0),
+      1,
+      `categorical history snapshot ${index + 1} sums to one`,
+    );
+  }
   const winningShares = (await get<{ shares: number }>('SELECT shares FROM option_positions WHERE option_id = ? AND user_id = ?', avaOption.id, a.id))!.shares;
   const electionBanked = (await marketById(election.id))!.collateral;
   const maxOutstanding = Math.max(

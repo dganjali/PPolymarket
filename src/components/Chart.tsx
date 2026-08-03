@@ -217,3 +217,215 @@ export function PriceChart({
     </div>
   );
 }
+
+const OUTCOME_COLORS = ['#27AE60', '#F2C94C', '#56CCF2', '#BB6BD9', '#EB5757', '#F2994A', '#2D9CDB', '#6FCF97'];
+
+export interface OutcomeChartSeries {
+  id: number;
+  label: string;
+  prices: number[];
+  timestamps: string[];
+}
+
+/** All mutually exclusive outcomes on one shared 0–100% probability scale. */
+export function MultiPriceChart({
+  series,
+  height = 220,
+}: {
+  series: OutcomeChartSeries[];
+  height?: number;
+}) {
+  const w = 620;
+  const pad = 12;
+  const sourceLength = Math.max(1, ...series.map((item) => item.prices.length));
+  const pointCount = Math.max(2, sourceLength);
+  const plotted = series.map((item, index) => {
+    const firstPrice = item.prices[0] ?? 0;
+    const firstTimestamp = item.timestamps[0];
+    const missing = Math.max(0, pointCount - item.prices.length);
+    return {
+      ...item,
+      color: OUTCOME_COLORS[index % OUTCOME_COLORS.length],
+      prices: [...Array(missing).fill(firstPrice), ...item.prices],
+      timestamps: [...Array(missing).fill(firstTimestamp), ...item.timestamps],
+    };
+  });
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const gridlines = [0.25, 0.5, 0.75];
+  const x = (index: number) => (index / (pointCount - 1)) * w;
+  const y = (price: number) => height - pad - price * (height - pad * 2);
+  const activeTimestamp = activeIndex == null
+    ? undefined
+    : plotted.find((item) => item.timestamps[activeIndex])?.timestamps[activeIndex];
+
+  const selectFromPointer = (event: PointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (!bounds.width) return;
+    const position = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left));
+    setActiveIndex(Math.round((position / bounds.width) * (pointCount - 1)));
+  };
+
+  const moveWithKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    setActiveIndex((current) => {
+      if (event.key === 'Home') return 0;
+      if (event.key === 'End') return pointCount - 1;
+      const start = current ?? pointCount - 1;
+      return Math.max(0, Math.min(pointCount - 1, start + (event.key === 'ArrowLeft' ? -1 : 1)));
+    });
+  };
+
+  const momentLabel = (timestamp?: string) => {
+    const instant = timestamp ? parseStamp(timestamp) : Number.NaN;
+    return Number.isNaN(instant)
+      ? `Snapshot ${(activeIndex ?? pointCount - 1) + 1} of ${sourceLength}`
+      : new Date(instant).toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        });
+  };
+
+  const spokenValues = activeIndex == null
+    ? ''
+    : plotted.map((item) => `${item.label} ${(item.prices[activeIndex] * 100).toFixed(1)}%`).join(', ');
+
+  return (
+    <div
+      style={{ position: 'relative', touchAction: 'pan-y' }}
+      tabIndex={0}
+      role="group"
+      aria-label={`Outcome probability history. ${activeIndex == null ? 'Hover, tap, or use the arrow keys to inspect a snapshot.' : `${momentLabel(activeTimestamp)}. ${spokenValues}`}`}
+      onPointerMove={selectFromPointer}
+      onPointerDown={selectFromPointer}
+      onPointerLeave={(event) => {
+        if (event.pointerType === 'mouse') setActiveIndex(null);
+      }}
+      onFocus={() => setActiveIndex((current) => current ?? pointCount - 1)}
+      onBlur={() => setActiveIndex(null)}
+      onKeyDown={moveWithKeyboard}
+    >
+      <svg
+        width="100%"
+        height={height}
+        viewBox={`0 0 ${w} ${height}`}
+        preserveAspectRatio="none"
+        style={{ display: 'block' }}
+      >
+        {gridlines.map((gridline) => (
+          <line key={gridline} x1={0} x2={w} y1={y(gridline)} y2={y(gridline)} stroke="#222222" strokeWidth={1} />
+        ))}
+        {activeIndex != null && (
+          <line
+            x1={x(activeIndex)}
+            x2={x(activeIndex)}
+            y1={pad}
+            y2={height - pad}
+            stroke="var(--ink-4)"
+            strokeWidth={1}
+            strokeDasharray="3 4"
+            opacity={0.75}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {plotted.map((item) => (
+          <g key={item.id}>
+            <polyline
+              points={sparkPoints(item.prices, w, height, pad)}
+              fill="none"
+              stroke={item.color}
+              strokeWidth={2.2}
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+            {item.prices.map((price, index) => (
+              <circle
+                key={`${item.id}-${index}`}
+                cx={x(index)}
+                cy={y(price)}
+                r={activeIndex === index ? 4 : 2}
+                fill={activeIndex === index ? '#ffffff' : item.color}
+                stroke={item.color}
+                strokeWidth={activeIndex === index ? 2.2 : 1}
+                opacity={activeIndex === index || pointCount <= 20 ? 1 : 0.42}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+          </g>
+        ))}
+      </svg>
+
+      {activeIndex != null && (
+        <div
+          className="mono"
+          role="status"
+          style={{
+            position: 'absolute',
+            zIndex: 2,
+            left: `${(activeIndex / (pointCount - 1)) * 100}%`,
+            top: 6,
+            transform:
+              activeIndex === 0
+                ? 'translateX(0)'
+                : activeIndex === pointCount - 1
+                  ? 'translateX(-100%)'
+                  : 'translateX(-50%)',
+            minWidth: 174,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: '1px solid var(--line-2)',
+            background: 'var(--card)',
+            boxShadow: '0 6px 24px rgba(0, 0, 0, 0.3)',
+            pointerEvents: 'none',
+          }}
+        >
+          <div style={{ marginBottom: 6, fontSize: 9.5, color: 'var(--dim)' }}>{momentLabel(activeTimestamp)}</div>
+          {plotted.map((item) => (
+            <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 4 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: item.color }} />
+              <span style={{ flex: 1, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink-3)' }}>
+                {item.label}
+              </span>
+              <span style={{ color: item.color }}>{(item.prices[activeIndex] * 100).toFixed(1)}%</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {gridlines.map((gridline) => (
+        <span
+          key={gridline}
+          className="mono"
+          style={{
+            position: 'absolute',
+            right: 2,
+            top: y(gridline),
+            transform: 'translateY(-50%)',
+            padding: '0 3px',
+            background: 'var(--panel)',
+            color: 'var(--dim-2)',
+            fontSize: 9,
+            pointerEvents: 'none',
+          }}
+        >
+          {gridline * 100}%
+        </span>
+      ))}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px 14px', marginTop: 8, paddingInline: 2 }}>
+        {plotted.map((item) => (
+          <div key={item.id} className="mono" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 9.5 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 99, background: item.color }} />
+            <span style={{ color: 'var(--dim)' }}>{item.label}</span>
+            <span style={{ color: item.color }}>{(item.prices[pointCount - 1] * 100).toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
+      <div className="mono" style={{ marginTop: 7, paddingLeft: 2, fontSize: 9, color: 'var(--dim-2)' }}>
+        Hover, tap, or use arrow keys to inspect
+      </div>
+    </div>
+  );
+}
