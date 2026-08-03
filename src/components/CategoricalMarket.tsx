@@ -152,7 +152,17 @@ export async function CategoricalMarket({
                     {own && <div className="mono" style={{ fontSize: 10, color: 'var(--dim)' }}>{fmtShares(own.shares)} owned</div>}
                     <div className="mono" style={{ fontSize: 14, color: 'var(--gold)' }}>{displayedPercentages[index]}%</div>
                   </div>
-                  <div className="oddsbar"><span style={{ width: `${option.price * 100}%` }} /></div>
+                  <div
+                    className="oddsbar"
+                    role="progressbar"
+                    aria-label={`${option.label} probability`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={displayedPercentages[index]}
+                    style={{ flex: 'none', width: '100%', height: 7 }}
+                  >
+                    <span style={{ width: `${option.price * 100}%` }} />
+                  </div>
                 </div>
               );
             })}
