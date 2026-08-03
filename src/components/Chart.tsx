@@ -225,18 +225,23 @@ export interface OutcomeChartSeries {
   label: string;
   prices: number[];
   timestamps: string[];
+  color?: string;
 }
 
-/** All mutually exclusive outcomes on one shared 0–100% probability scale. */
+/**
+ * Small-multiple charts for mutually exclusive outcomes. Separate plots keep
+ * equally priced outcomes visible instead of drawing identical paths on top
+ * of one another.
+ */
 export function MultiPriceChart({
   series,
-  height = 220,
+  height = 116,
 }: {
   series: OutcomeChartSeries[];
   height?: number;
 }) {
-  const w = 620;
-  const pad = 12;
+  const w = 300;
+  const pad = 10;
   const sourceLength = Math.max(1, ...series.map((item) => item.prices.length));
   const pointCount = Math.max(2, sourceLength);
   const plotted = series.map((item, index) => {
@@ -245,7 +250,7 @@ export function MultiPriceChart({
     const missing = Math.max(0, pointCount - item.prices.length);
     return {
       ...item,
-      color: OUTCOME_COLORS[index % OUTCOME_COLORS.length],
+      color: item.color ?? OUTCOME_COLORS[index % OUTCOME_COLORS.length],
       prices: [...Array(missing).fill(firstPrice), ...item.prices],
       timestamps: [...Array(missing).fill(firstTimestamp), ...item.timestamps],
     };
@@ -291,6 +296,38 @@ export function MultiPriceChart({
   const spokenValues = activeIndex == null
     ? ''
     : plotted.map((item) => `${item.label} ${(item.prices[activeIndex] * 100).toFixed(1)}%`).join(', ');
+
+  if (series.length > 1) {
+    return (
+      <div
+        role="group"
+        aria-label="Outcome probability history"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+          gap: 10,
+        }}
+      >
+        {series.map((item, index) => (
+          <div
+            key={item.id}
+            style={{
+              minWidth: 0,
+              padding: '9px 9px 7px',
+              border: '1px solid var(--line-2)',
+              borderRadius: 9,
+              background: 'var(--card)',
+            }}
+          >
+            <MultiPriceChart
+              series={[{ ...item, color: item.color ?? OUTCOME_COLORS[index % OUTCOME_COLORS.length] }]}
+              height={height}
+            />
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div
