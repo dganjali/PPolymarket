@@ -228,20 +228,16 @@ export interface OutcomeChartSeries {
   color?: string;
 }
 
-/**
- * Small-multiple charts for mutually exclusive outcomes. Separate plots keep
- * equally priced outcomes visible instead of drawing identical paths on top
- * of one another.
- */
+/** A 100%-stacked history chart for mutually exclusive outcomes. */
 export function MultiPriceChart({
   series,
-  height = 116,
+  height = 190,
 }: {
   series: OutcomeChartSeries[];
   height?: number;
 }) {
-  const w = 300;
-  const pad = 10;
+  const w = 620;
+  const pad = 12;
   const sourceLength = Math.max(1, ...series.map((item) => item.prices.length));
   const pointCount = Math.max(2, sourceLength);
   const plotted = series.map((item, index) => {
@@ -259,6 +255,23 @@ export function MultiPriceChart({
   const gridlines = [0.25, 0.5, 0.75];
   const x = (index: number) => (index / (pointCount - 1)) * w;
   const y = (price: number) => height - pad - price * (height - pad * 2);
+  const totals = Array.from({ length: pointCount }, (_, index) =>
+    plotted.reduce((sum, item) => sum + item.prices[index], 0),
+  );
+  const cumulative = Array(pointCount).fill(0) as number[];
+  const bands = plotted.map((item) => {
+    const lower = [...cumulative];
+    const upper = item.prices.map((price, index) => {
+      const normalized = totals[index] > 0 ? price / totals[index] : 1 / Math.max(1, plotted.length);
+      cumulative[index] = Math.min(1, cumulative[index] + normalized);
+      return cumulative[index];
+    });
+    return { ...item, lower, upper };
+  });
+  const bandPoints = (lower: number[], upper: number[]) => [
+    ...upper.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`),
+    ...lower.map((value, index) => `${x(lower.length - index - 1).toFixed(1)},${y(lower[lower.length - index - 1]).toFixed(1)}`),
+  ].join(' ');
   const activeTimestamp = activeIndex == null
     ? undefined
     : plotted.find((item) => item.timestamps[activeIndex])?.timestamps[activeIndex];
@@ -297,38 +310,6 @@ export function MultiPriceChart({
     ? ''
     : plotted.map((item) => `${item.label} ${(item.prices[activeIndex] * 100).toFixed(1)}%`).join(', ');
 
-  if (series.length > 1) {
-    return (
-      <div
-        role="group"
-        aria-label="Outcome probability history"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
-          gap: 10,
-        }}
-      >
-        {series.map((item, index) => (
-          <div
-            key={item.id}
-            style={{
-              minWidth: 0,
-              padding: '9px 9px 7px',
-              border: '1px solid var(--line-2)',
-              borderRadius: 9,
-              background: 'var(--card)',
-            }}
-          >
-            <MultiPriceChart
-              series={[{ ...item, color: item.color ?? OUTCOME_COLORS[index % OUTCOME_COLORS.length] }]}
-              height={height}
-            />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
   return (
     <div
       style={{ position: 'relative', touchAction: 'pan-y' }}
@@ -351,8 +332,37 @@ export function MultiPriceChart({
         preserveAspectRatio="none"
         style={{ display: 'block' }}
       >
+        {bands.map((item) => (
+          <g key={item.id}>
+            <polygon
+              points={bandPoints(item.lower, item.upper)}
+              fill={item.color}
+              fillOpacity={0.48}
+              stroke="none"
+            />
+            <polyline
+              points={sparkPoints(item.upper, w, height, pad)}
+              fill="none"
+              stroke={item.color}
+              strokeWidth={1.5}
+              strokeLinejoin="round"
+              opacity={0.95}
+              vectorEffect="non-scaling-stroke"
+            />
+          </g>
+        ))}
         {gridlines.map((gridline) => (
-          <line key={gridline} x1={0} x2={w} y1={y(gridline)} y2={y(gridline)} stroke="#222222" strokeWidth={1} />
+          <line
+            key={gridline}
+            x1={0}
+            x2={w}
+            y1={y(gridline)}
+            y2={y(gridline)}
+            stroke="#ffffff"
+            strokeWidth={1}
+            opacity={0.14}
+            vectorEffect="non-scaling-stroke"
+          />
         ))}
         {activeIndex != null && (
           <line
@@ -360,38 +370,13 @@ export function MultiPriceChart({
             x2={x(activeIndex)}
             y1={pad}
             y2={height - pad}
-            stroke="var(--ink-4)"
+            stroke="var(--ink-2)"
             strokeWidth={1}
             strokeDasharray="3 4"
-            opacity={0.75}
+            opacity={0.9}
             vectorEffect="non-scaling-stroke"
           />
         )}
-        {plotted.map((item) => (
-          <g key={item.id}>
-            <polyline
-              points={sparkPoints(item.prices, w, height, pad)}
-              fill="none"
-              stroke={item.color}
-              strokeWidth={2.2}
-              strokeLinejoin="round"
-              vectorEffect="non-scaling-stroke"
-            />
-            {item.prices.map((price, index) => (
-              <circle
-                key={`${item.id}-${index}`}
-                cx={x(index)}
-                cy={y(price)}
-                r={activeIndex === index ? 4 : 2}
-                fill={activeIndex === index ? '#ffffff' : item.color}
-                stroke={item.color}
-                strokeWidth={activeIndex === index ? 2.2 : 1}
-                opacity={activeIndex === index || pointCount <= 20 ? 1 : 0.42}
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-          </g>
-        ))}
       </svg>
 
       {activeIndex != null && (
