@@ -20,22 +20,25 @@ negotiation.
 | --- | --- | --- |
 | **University club treasurer** — the first and fastest sale | $200–$2,000/yr of dues or student-government money, spent by a student officer on a club card | Chapter-wide seats (80–300 people), branding for a rush or recruiting event, a season that maps to a semester and gets re-run |
 | **Workplace culture owner** — office manager, EA, an EM with a fun budget | $500–$5,000/yr morale budget; a corporate card clears anything under ~$100/mo | Headcount over 25, wanting the company's jokes out of `/discover`, wanting only `@company.com` in the group |
-| **School-side adult** — teacher, club advisor, activities director | $50–$500/yr of department money, on a purchasing card or a small PO | A class is 25–35 people and a grade is 200+; they hit the member cap on day one. Then: the crest and colours, and last year's season still being there |
-| **The commissioner** — fantasy-league guy, friend-group ringleader | His own $20–$60/yr, same wallet as the league fee | Multi-season history, more live markets, and pure customization dopamine |
+| **School-side adult** — teacher, club advisor, activities director | $50–$500/yr of department money, on a purchasing card or a small PO | One class fits in Free; a *grade* is 200+ and does not. Then: the crest and colours, and last year's season still being there |
+| **The commissioner** — fantasy-league guy, friend-group ringleader | His own $20–$60/yr, same wallet as the league fee | Multi-season history, more live markets, and pure customization dopamine. At $29 he does not deliberate |
 
 **Who will never pay, stated plainly:**
 
 - **Every member who is not the admin.** They did not choose the tool and get
   nothing incremental from paying. They are never shown a price.
-- **Students, individually.** Not because they lack $9 — taking a minor's money
+- **Students, individually.** Not because they lack the money — taking a minor's
   for a play-money markets product is the worst legal and press position
   available. That is what the Campus tier exists to avoid.
 - **The friend group of six.** They will run four markets and one season and
   never touch a limit. That is intentional: they are the distribution channel,
   not the revenue.
 
-Realistic shape: clubs and workplaces in year one, schools in year two,
-commissioners as noise that pays the Postgres bill.
+Realistic shape at these prices: the commissioner and the club officer convert
+first and convert fast, because $29 needs no approval from anyone. Workplaces
+follow. Schools are a year-two motion — the money is real but the sales cycle
+is a season long, and Campus exists mostly to solve a legal problem, not a
+pricing one. Nobody's first payment should require a conversation.
 
 ## 2. Tiers
 
@@ -44,12 +47,13 @@ self-serve rungs, one invoiced.
 
 | | Free | Plus | Pro | Campus |
 | --- | --- | --- | --- | --- |
-| Monthly | $0 | $9 | $29 | — |
-| Annual | $0 | **$79** | **$249** | **$999**, invoiced |
-| Members | 25 | 120 | 500 | ∞ |
-| Live markets at once | 4 | 15 | 60 | ∞ |
-| Admins | 2 | 6 | 20 | ∞ |
-| Active invite links | 3 | 10 | 50 | ∞ |
+| Monthly | $0 | $4 | $12 | — |
+| **Yearly** | $0 | **$29** | **$99** | **$499**, invoiced |
+| One season (~4 months, one-off) | — | **$12** | **$39** | — |
+| Members | 40 | 150 | 600 | ∞ |
+| Live markets at once | 8 | 25 | 100 | ∞ |
+| Admins | 3 | 8 | 25 | ∞ |
+| Active invite links | 5 | 15 | 60 | ∞ |
 | Outcomes per market | 8 | 12 | 20 | 20 |
 | History kept | 90 days | forever | forever | forever |
 | Past seasons visible | 1 | all | all | all |
@@ -61,38 +65,61 @@ self-serve rungs, one invoiced.
 | CSV export | — | ✓ | ✓ | ✓ |
 | **Buy, sell, resolve, dispute, comment** | **✓** | **✓** | **✓** | **✓** |
 
-**Where the prices come from.** Plus sits deliberately just under **Discord
-Nitro ($9.99/mo, ~$99.99/yr)** — the same behaviour we are copying, where one
-enthusiast pays a personal subscription that mostly benefits a group. "Cheaper
-than Nitro, and it covers everyone" is a sentence a commissioner says out loud.
-Pro is anchored on classroom tools in the **Kahoot 360 range (roughly $19–$59/mo
-per host)**, a band school buyers have already had approved, and against per-seat
-team tools — a 40-person group is ~$290/mo on **Slack Pro (~$7.25/user/mo
-annual)** or ~$400/mo on **Notion Plus ($10/user/mo annual)**. Pro at $29 flat is
-a tenth of that, and that ratio is the whole pitch. Campus at $999/yr is not
-anchored on a SaaS list price at all: it is anchored on the $1,000 signature
-threshold most US districts use for a purchase order.
+### Why these numbers, and why not the last set
 
-Confidence: Nitro and Notion figures are solid; Slack and Kahoot have been
-repriced repeatedly and vary by region and segment — verify both before putting
-them in marketing copy. Sleeper was considered as a comparable and dropped: it
-monetizes through real-money contests, which is the direction this product must
-never be pulled in.
+The first draft of this plan priced Plus at $79/yr and Pro at $249/yr, anchored
+on Kahoot, Slack and Notion. That was the wrong reference class and it produced
+a number nobody would pay. Those are work tools bought with someone else's
+money through a procurement process. This is a group hobby bought with a
+personal card by the same person who covers the league fee — and it is used in
+bursts, around a season, by people who mostly do not think about it in July.
 
-Annual discounts are steep (27–28%) on purpose. Clubs and schools buy once a
-year with budget that expires, and annual prepay is the only thing that lets a
-$9 product survive a school calendar.
+The right anchors:
 
-**What each limit is anchored on.** Members, live markets and retention cost
-real money to serve: every trade writes a `trades` row *and* a `price_points`
-row, and a categorical trade writes one `option_price_points` row **per
-outcome** — an 8-outcome market has 8× the write amplification of a binary one,
-which is exactly why outcome count is a paid axis. Branding, domain lock,
-market types and analytics cost nothing to serve and are priced on want. That
-seam is real and worth being honest about: retention is about 70% a want-lever.
-It stays because Slack's free tier trained the whole market to accept a 90-day
-window, and because "last year's season" is what a returning advisor asks for
-first.
+- **Splitwise Pro, ~$3–5/mo** — the closest structural analogue there is: a free
+  group utility where one person upgrades and everyone benefits. Plus at $4/mo
+  sits right on it. (Reported prices vary by source and region; treat the exact
+  figure as approximate.)
+- **A shared game server, $5–15/mo** — what a group already pays to have
+  somewhere of its own. Pro at $12/mo is inside that.
+- **A fantasy league fee, $20–50 paid once by the commissioner** — the closest
+  *behavioural* analogue, and the reason the season pass exists at all.
+- **Discord Nitro, $9.99/mo** — a ceiling, not a target. Nitro is a daily habit;
+  this is not, so it should not cost the same.
+
+Two structural changes came out of that, not just smaller numbers:
+
+**Free got bigger, not smaller.** 40 members and 8 live markets. The previous
+draft capped Free at 25 and then *named* "a class is 25–35 people, so they hit
+the cap on day one" as the upgrade trigger. That is a wall in front of the
+product's best demo. Free should comfortably hold a class and a friend group;
+paying should be for genuine scale — a chapter, a grade, a company — not for
+permission to start.
+
+**The season pass.** A subscription is the wrong shape for a school calendar. A
+group runs a semester, then goes quiet for four months, and billing through the
+quiet half is how you earn a cancellation. $12 for a season is a one-off with
+nothing to remember to cancel, and it collects more than the two months they
+would have paid before quitting. In Stripe it is `mode: payment`, not a
+subscription.
+
+**Campus at $499/yr** instead of $999. Still one invoice, still under the
+signature threshold most departments use — but now comfortably under it, so it
+clears without a committee, and it prices sensibly against five Pro groups.
+
+Yearly saves 40% against monthly on Plus and 31% on Pro. Steep on purpose:
+clubs and schools buy once a year with budget that expires, and annual prepay is
+the only thing that lets a $4 product survive a school calendar.
+
+### What each limit is anchored on
+
+Members, live markets and retention cost real money to serve: every trade writes
+a `trades` row *and* a `price_points` row, and a categorical trade writes one
+`option_price_points` row **per outcome** — an 8-outcome market has 8× the write
+amplification of a binary one, which is why outcome count is a paid axis.
+Branding, domain lock, market types and analytics cost nothing to serve and are
+priced on want. That seam is real: retention is about 70% a want-lever. It stays
+because Slack's free tier trained the whole market to accept a 90-day window.
 
 ## 3. What is built
 
@@ -194,9 +221,10 @@ In context, at the moment of the block, never as a nag:
   measure how many live groups would hit each ceiling and where. Do not turn
   enforcement on until the distribution is known; a member cap that catches 40%
   of active groups is a different product decision from one that catches 4%.
-- **Days 31–60 — charge the willing.** Turn on Plus and Pro with Stripe. Sell to
-  university clubs first: fastest close, real budget, one decision. Instrument
-  the upgrade funnel from limit-hit to checkout.
+- **Days 31–60 — charge the willing.** Turn on Plus and Pro with Stripe, season
+  pass included. Sell to university clubs and commissioners first: at $29 there
+  is nothing to approve, so the funnel is limit-hit → checkout with no step in
+  between. Instrument exactly that.
 - **Days 61–90 — build what the money asked for.** Ship the highest-value Pro
   feature that is still missing (numeric and range markets are already designed
   as a thin wrapper over the existing LMSR), then open Campus with an invoice

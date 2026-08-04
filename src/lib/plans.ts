@@ -13,6 +13,17 @@
  * cost money to serve (members, live markets, history) plus the things people
  * actually want (branding, market types, analytics).
  *
+ * On the prices: this is a group hobby, not a work tool. The person reaching
+ * for a card is the one who also pays the league fee or the game-server bill,
+ * out of their own pocket, for something the group uses in bursts — so the
+ * numbers are anchored on Splitwise Pro and a Minecraft realm, not on Slack
+ * seats. Anything that needs a moment's thought is too expensive here.
+ *
+ * Hence the season pass. A class group runs one semester and goes quiet all
+ * summer; billing it monthly through the quiet half is how you earn a
+ * cancellation. A one-off that covers a season is both cheaper for them and
+ * worth more to us than the two months they would have paid before quitting.
+ *
  * Two rules that are not negotiable and are enforced below:
  *   1. Trading is never gated. Not by plan, not in overage, not when a card
  *      fails. A market that exists can always be traded, resolved and disputed.
@@ -57,6 +68,8 @@ export interface Plan {
   /** Price in cents. Zero for free, and the campus tier is invoiced. */
   monthlyCents: number;
   annualCents: number;
+  /** One-off, covers a single season. Zero where the tier does not offer one. */
+  seasonCents: number;
   selfServe: boolean;
   /** The three or four lines that sell it on the pricing page. */
   highlights: string[];
@@ -69,21 +82,22 @@ export const PLANS: Record<PlanId, Plan> = {
   free: {
     id: 'free',
     name: 'Free',
-    tagline: 'A friend group, a season, real market prices.',
+    tagline: 'A friend group or a whole class, free forever.',
     monthlyCents: 0,
     annualCents: 0,
+    seasonCents: 0,
     selfServe: true,
     highlights: [
-      'Up to 25 members and 4 live markets',
+      'Up to 40 members and 8 live markets',
       'Yes/No and multiple-choice markets',
       'Seasons, prizes, standings and disputes',
       '90 days of activity history',
     ],
     limits: {
-      members: 25,
-      activeMarkets: 4,
-      admins: 2,
-      invites: 3,
+      members: 40,
+      activeMarkets: 8,
+      admins: 3,
+      invites: 5,
       outcomes: 8,
       retentionDays: 90,
       seasonsVisible: 1,
@@ -98,21 +112,22 @@ export const PLANS: Record<PlanId, Plan> = {
   plus: {
     id: 'plus',
     name: 'Plus',
-    tagline: 'For the group that outgrew the free tier in a week.',
-    monthlyCents: 900,
-    annualCents: 7900,
+    tagline: 'For the club that outgrew a class-sized group.',
+    monthlyCents: 400,
+    annualCents: 2900,
+    seasonCents: 1200,
     selfServe: true,
     highlights: [
-      '120 members and 15 live markets',
+      '150 members and 25 live markets',
       'Your logo and your colour on every screen',
       'Every season kept, forever',
       'Export standings and trades as CSV',
     ],
     limits: {
-      members: 120,
-      activeMarkets: 15,
-      admins: 6,
-      invites: 10,
+      members: 150,
+      activeMarkets: 25,
+      admins: 8,
+      invites: 15,
       outcomes: 12,
       retentionDays: UNLIMITED,
       seasonsVisible: UNLIMITED,
@@ -127,21 +142,22 @@ export const PLANS: Record<PlanId, Plan> = {
   pro: {
     id: 'pro',
     name: 'Pro',
-    tagline: 'A whole club, a whole office, a whole grade.',
-    monthlyCents: 2900,
-    annualCents: 24900,
+    tagline: 'A whole grade, a whole office, a whole chapter.',
+    monthlyCents: 1200,
+    annualCents: 9900,
+    seasonCents: 3900,
     selfServe: true,
     highlights: [
-      '500 members and 60 live markets',
+      '600 members and 100 live markets',
       'Numeric and range markets — not just Yes/No',
       'Lock joining to one email domain',
       'Calibration scoring: who is actually right',
     ],
     limits: {
-      members: 500,
-      activeMarkets: 60,
-      admins: 20,
-      invites: 50,
+      members: 600,
+      activeMarkets: 100,
+      admins: 25,
+      invites: 60,
       outcomes: 20,
       retentionDays: UNLIMITED,
       seasonsVisible: UNLIMITED,
@@ -158,7 +174,8 @@ export const PLANS: Record<PlanId, Plan> = {
     name: 'Campus',
     tagline: 'One invoice, every group on it.',
     monthlyCents: 0,
-    annualCents: 99900,
+    annualCents: 49900,
+    seasonCents: 0,
     selfServe: false,
     highlights: [
       'Unlimited members, markets and groups',
@@ -305,11 +322,24 @@ function describeLimit(key: QuotaKey, plan: PlanId): string {
   return value === UNLIMITED ? `unlimited ${many}` : `${value} ${value === 1 ? one : many}`;
 }
 
-/** "$9/mo" / "$79/yr" / "Free". Prices live in cents and are formatted once. */
-export function priceLabel(cents: number, period: 'mo' | 'yr'): string {
+export type Cadence = 'monthly' | 'annual' | 'season';
+
+/** How long each cadence buys, in days. A season is one school term. */
+export const CADENCE_DAYS: Record<Cadence, number> = {
+  monthly: 30,
+  annual: 365,
+  season: 120,
+};
+
+export const centsFor = (plan: Plan, cadence: Cadence): number =>
+  cadence === 'annual' ? plan.annualCents : cadence === 'season' ? plan.seasonCents : plan.monthlyCents;
+
+/** "$4/mo" / "$29/yr" / "$12 a season" / "Free". */
+export function priceLabel(cents: number, period: 'mo' | 'yr' | 'season'): string {
   if (cents === 0) return 'Free';
   const dollars = cents / 100;
-  return `$${Number.isInteger(dollars) ? dollars : dollars.toFixed(2)}/${period}`;
+  const amount = `$${Number.isInteger(dollars) ? dollars : dollars.toFixed(2)}`;
+  return period === 'season' ? `${amount} a season` : `${amount}/${period}`;
 }
 
 /** What annual saves against twelve months of monthly, as a percentage. */

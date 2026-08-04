@@ -42,7 +42,7 @@ import {
 } from '@/lib/engine';
 import type { Side } from '@/lib/amm';
 import { applyPlan, provider } from '@/lib/billing';
-import { ORDER, PLANS, type PlanId } from '@/lib/plans';
+import { ORDER, PLANS, type Cadence, type PlanId } from '@/lib/plans';
 
 export interface FormState {
   error?: string;
@@ -569,7 +569,8 @@ export async function upgradeGroupAction(_prev: FormState, fd: FormData): Promis
 
   const plan = str(fd, 'plan') as PlanId;
   if (!ORDER.includes(plan) || plan === 'free') return { error: 'Pick a plan.' };
-  const cadence = str(fd, 'cadence') === 'monthly' ? 'monthly' : 'annual';
+  const asked = str(fd, 'cadence');
+  const cadence: Cadence = asked === 'monthly' || asked === 'season' ? asked : 'annual';
 
   const res = await guard(async () => {
     await requireAdmin(user.id, group.id);

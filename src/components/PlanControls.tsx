@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from 'react';
 import { downgradeGroupAction, upgradeGroupAction, type FormState } from '@/app/actions';
-import { PLANS, annualSaving, priceLabel, type PlanId } from '@/lib/plans';
+import { PLANS, annualSaving, centsFor, priceLabel, type Cadence, type PlanId } from '@/lib/plans';
 import { SubmitButton, Toast } from './ui';
 
 /** Buy a plan. The cadence toggle is the only state; the rest is a form post. */
@@ -19,9 +19,15 @@ export function UpgradeForm({
   simulated: boolean;
 }) {
   const [state, formAction] = useActionState(upgradeGroupAction, {} as FormState);
-  const [cadence, setCadence] = useState<'annual' | 'monthly'>('annual');
+  // Yearly first: it is the cheapest per month and the one most groups want.
+  const [cadence, setCadence] = useState<Cadence>('annual');
   const details = PLANS[plan];
   const on = current === plan;
+  const options: { id: Cadence; label: string; note?: string }[] = [
+    { id: 'annual', label: 'Yearly', note: annualSaving(details) > 0 ? `−${annualSaving(details)}%` : undefined },
+    { id: 'season', label: 'One season' },
+    { id: 'monthly', label: 'Monthly' },
+  ];
 
   return (
     <form action={formAction} className="plan-buy">
@@ -30,25 +36,34 @@ export function UpgradeForm({
       <input type="hidden" name="cadence" value={cadence} />
 
       <div className="plan-cadence" role="group" aria-label="Billing period">
-        {(['annual', 'monthly'] as const).map((option) => (
+        {options.map((option) => (
           <button
-            key={option}
+            key={option.id}
             type="button"
             className="plan-cadence-btn pressable"
-            data-on={cadence === option}
-            onClick={() => setCadence(option)}
+            data-on={cadence === option.id}
+            onClick={() => setCadence(option.id)}
           >
-            {option === 'annual' ? 'Yearly' : 'Monthly'}
-            {option === 'annual' && annualSaving(details) > 0 && (
-              <span className="plan-save">−{annualSaving(details)}%</span>
-            )}
+            {option.label}
+            {option.note && <span className="plan-save">{option.note}</span>}
           </button>
         ))}
       </div>
 
-      <div className="plan-price mono">
-        {priceLabel(cadence === 'annual' ? details.annualCents : details.monthlyCents, cadence === 'annual' ? 'yr' : 'mo')}
+      {/* The figure stays monospaced; the period does not, because "a season"
+          set in mono at 28px reads as though it has double spaces in it. */}
+      <div className="plan-price">
+        <span className="mono">${(centsFor(details, cadence) / 100).toLocaleString('en-US')}</span>
+        <span className="plan-period">
+          {cadence === 'annual' ? 'per year' : cadence === 'season' ? 'for the season' : 'per month'}
+        </span>
       </div>
+      {cadence === 'season' && (
+        <p className="plan-note">
+          A one-off payment covering one season — about four months. It does not renew, so there is
+          nothing to remember to cancel over the summer.
+        </p>
+      )}
 
       {state.error && <div className="error">{state.error}</div>}
 

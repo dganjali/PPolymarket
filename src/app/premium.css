@@ -208,3 +208,6 @@
 .upsell-head { font-size: var(--t-small); font-weight: 600; }
 .upsell-body { margin: 4px 0 0; font-size: var(--t-micro); line-height: 1.55; color: var(--ink-4); }
 .upsell-cta { flex: none; font-size: var(--t-micro); font-weight: 600; color: var(--accent-hi); white-space: nowrap; }
+
+.plan-price { display: flex; align-items: baseline; gap: 8px; }
+.plan-period { font-size: var(--t-small); font-weight: 500; color: var(--dim); }

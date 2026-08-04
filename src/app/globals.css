@@ -47,8 +47,10 @@
   --no-bg-hi: #3a1d19;
   --no-line: #5a2b24;
 
-  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --sans: 'Inter', system-ui, -apple-system, sans-serif;
+  /* Supplied by next/font in layout.tsx, self-hosted. The fallbacks matter:
+     they are what renders during `display: swap`, before the file lands. */
+  --mono: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: var(--font-sans), system-ui, -apple-system, sans-serif;
 
   /* Type scale. Six steps, and no size outside them — the old screens had
      thirty-odd hand-picked font sizes, which is most of why they read as busy. */

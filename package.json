@@ -12,9 +12,11 @@
     "start": "next start -p 3000",
     "seed": "node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/seed.ts",
     "test": "node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/test-amm.ts && node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/test-chart.ts && node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/test-engine.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "profile": "DEBUG_SQL=1 node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/profile.ts"
   },
   "dependencies": {
+    "@vercel/speed-insights": "^2.0.0",
     "next": "15.5.22",
     "postgres": "^3.4.9",
     "react": "19.1.1",

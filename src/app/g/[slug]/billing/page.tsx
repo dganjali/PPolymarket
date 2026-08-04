@@ -151,9 +151,7 @@ export default async function BillingPage({
                 data-on={id === current}
               >
                 <span className="billing-option-name">{PLANS[id].name}</span>
-                <span className="mono billing-option-price">
-                  {PLANS[id].selfServe ? priceLabel(PLANS[id].annualCents, 'yr') : '$999/yr'}
-                </span>
+                <span className="mono billing-option-price">{priceLabel(PLANS[id].annualCents, 'yr')}</span>
                 <span className="t-micro billing-option-line">{PLANS[id].tagline}</span>
               </Link>
             ))}

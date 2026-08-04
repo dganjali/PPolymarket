@@ -149,3 +149,26 @@
 .season-rank { width: 18px; font-size: var(--t-micro); color: var(--dim); }
 .season-name { color: var(--ink-2); }
 .season-total { font-size: var(--t-small); font-variant-numeric: tabular-nums; }
+
+/* ── skeletons ────────────────────────────────────────────────────────────── */
+
+.sk-text { display: block; border-radius: 5px; }
+.sk-gap { height: 8px; }
+.sk-card { pointer-events: none; }
+.sk-glyph { width: 40px; height: 40px; border-radius: 11px; flex: none; }
+.sk-glyph-lg { width: 56px; height: 56px; border-radius: 15px; flex: none; }
+.sk-back { width: 32px; height: 32px; border-radius: var(--r-sm); flex: none; margin-top: 10px; }
+.sk-spark { width: 72px; height: 26px; border-radius: 5px; }
+.sk-pct { width: 62px; height: 26px; border-radius: 6px; }
+.sk-btn { flex: 1; height: 40px; border-radius: var(--r-sm); }
+.sk-avatar { width: 30px; height: 30px; border-radius: 9px; flex: none; }
+.sk-figure { width: 64px; height: 15px; border-radius: 5px; flex: none; }
+.sk-row { pointer-events: none; }
+.sk-chart { display: block; width: 100%; height: 300px; border-radius: var(--r-sm); margin-top: var(--s-2); }
+.sk-outcome { pointer-events: none; gap: var(--s-3); }
+.sk-ticket { display: block; width: 100%; height: 430px; border-radius: var(--r-md); }
+.sk-heading { display: block; width: 220px; height: 26px; border-radius: 7px; }
+
+/* The grid is defined at >=1024px in globals; skeletons need it at every width
+   so the placeholder matches the layout it is standing in for. */
+.sk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--s-2); }

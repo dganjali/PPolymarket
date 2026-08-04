@@ -6,8 +6,8 @@ import {
   memberCount,
   membership,
   membershipRequests,
+  memberWorth,
   myGroups,
-  standings,
   unreadNotificationCount,
 } from '@/lib/data';
 import { sweepClosures, sweepResolutions } from '@/lib/engine';
@@ -40,8 +40,8 @@ export default async function GroupLayout({
   const base = `/g/${slug}`;
   const isAdmin = ms.role === 'admin';
 
-  const [rows, groups, unread, members, waiting] = await Promise.all([
-    standings(group.id, group.starting_balance),
+  const [worth, groups, unread, members, waiting] = await Promise.all([
+    memberWorth(user.id, group.id),
     myGroups(user.id),
     unreadNotificationCount(user.id),
     memberCount(group.id),
@@ -91,9 +91,7 @@ export default async function GroupLayout({
     },
   ];
 
-  const mine = rows.find((r) => r.userId === user.id);
-  const total = mine?.total ?? ms.balance;
-  const pnl = total - group.starting_balance;
+  const pnl = worth.total - group.starting_balance;
   const pnlClass = pnl >= 0 ? 'up' : 'down';
   const plan = planOf(group);
 

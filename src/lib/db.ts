@@ -542,6 +542,20 @@ async function ensurePostgres(): Promise<void> {
 type Row = Record<string, unknown>;
 
 /**
+ * Query accounting, for finding the N+1s.
+ *
+ * Off unless DEBUG_SQL is set, and a single integer increment when it is on, so
+ * it costs nothing in production. `queryStats` is read by scripts/profile.ts.
+ */
+const counting = !!process.env.DEBUG_SQL;
+let queries = 0;
+export const queryStats = {
+  reset: () => { queries = 0; },
+  count: () => queries,
+};
+const tally = () => { if (counting) queries++; };
+
+/**
  * node:sqlite hands back rows with a null prototype. React refuses to
  * serialize those across the server/client boundary, so every row is copied
  * into a plain object on the way out.
@@ -574,12 +588,14 @@ function requireDatabase() {
 
 export async function all<T = Row>(sql: string, ...params: unknown[]): Promise<T[]> {
   requireDatabase();
+  tally();
   if (pg) return Array.from(await pgQuery<T>(sql, params, 'read'), plain);
   return (db.prepare(sql).all(...(params as never[])) as T[]).map(plain);
 }
 
 export async function get<T = Row>(sql: string, ...params: unknown[]): Promise<T | undefined> {
   requireDatabase();
+  tally();
   if (pg) {
     const rows = await pgQuery<T>(sql, params, 'read');
     return rows.length ? plain(rows[0]) : undefined;
@@ -590,6 +606,7 @@ export async function get<T = Row>(sql: string, ...params: unknown[]): Promise<T
 
 export async function run(sql: string, ...params: unknown[]): Promise<{ lastInsertRowid: number; changes: number }> {
   requireDatabase();
+  tally();
   if (pg) {
     const rows = await pgQuery<{ id?: number }>(sql, params, 'run');
     return { lastInsertRowid: Number(rows[0]?.id ?? 0), changes: rows.count };

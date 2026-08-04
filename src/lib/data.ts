@@ -445,22 +445,83 @@ export async function openLegs(userId: number, groupId: number): Promise<OpenPos
     userId,
     groupId,
   );
-  const optionMarkets = new Map<number, Awaited<ReturnType<typeof optionsWithPrices>>>();
-  for (const row of optionRows) {
-    const prices = optionMarkets.get(row.id) ?? await optionsWithPrices(row);
-    optionMarkets.set(row.id, prices);
-    const price = prices.find((option) => option.id === row.option_id)?.price ?? 0;
-    legs.push({
-      market: row,
-      side: row.option_label,
-      optionId: row.option_id,
-      shares: row.shares,
-      cost: row.cost,
-      price,
-      value: await categoricalExitValue(row, row.option_id, row.shares),
-    });
+  if (optionRows.length) {
+    const season = optionRows[0].season_number;
+    const optionsFor = await optionsByMarket(groupId, season);
+    for (const row of optionRows) {
+      const options = optionsFor.get(row.id) ?? [];
+      const index = options.findIndex((option) => option.id === row.option_id);
+      const price = index < 0 ? 0 : categoricalPrices(categoricalState(row, options))[index];
+      legs.push({
+        market: row,
+        side: row.option_label,
+        optionId: row.option_id,
+        shares: row.shares,
+        cost: row.cost,
+        price,
+        value: categoricalExitValueFrom(row.lmsr_b, options, row.option_id, row.shares),
+      });
+    }
   }
   return legs.sort((a, b) => b.value - a.value);
+}
+
+/**
+ * What one member is worth: their cash plus mark-to-market on their own legs.
+ *
+ * The app shell needs exactly this — one number and its change — and used to get
+ * it by computing the entire standings table on every page load, which meant
+ * valuing every position held by every member to render one sidebar tile. Two
+ * queries scoped to one person replace roughly a dozen scoped to everybody.
+ */
+export async function memberWorth(
+  userId: number,
+  groupId: number,
+): Promise<{ cash: number; invested: number; total: number }> {
+  const [cash, binary, categorical] = await Promise.all([
+    get<{ balance: number }>('SELECT balance FROM memberships WHERE user_id = ? AND group_id = ?', userId, groupId),
+    all<{ yes_shares: number; no_shares: number; yes_reserve: number; no_reserve: number }>(
+      `SELECT p.yes_shares, p.no_shares, m.yes_reserve, m.no_reserve
+         FROM positions p JOIN markets m ON m.id = p.market_id JOIN groups g ON g.id = m.group_id
+        WHERE p.user_id = ? AND m.group_id = ? AND m.season_number = g.current_season
+          AND m.status IN ('open','closed','resolving')`,
+      userId,
+      groupId,
+    ),
+    // Nothing clever here on purpose: an aggregate that stitched the sibling
+    // quantities onto each row would save a query, but GROUP_CONCAT/string_agg
+    // and numeric-to-text casting differ between SQLite and Postgres, and this
+    // file has to run identically on both.
+    all<{ market_id: number; option_id: number; shares: number; lmsr_b: number }>(
+      `SELECT op.market_id, op.option_id, op.shares, m.lmsr_b
+         FROM option_positions op
+         JOIN markets m ON m.id = op.market_id JOIN groups g ON g.id = m.group_id
+        WHERE op.user_id = ? AND m.group_id = ? AND m.season_number = g.current_season
+          AND m.status IN ('open','closed','resolving') AND op.shares > 0.0001`,
+      userId,
+      groupId,
+    ),
+  ]);
+
+  let invested = 0;
+  for (const row of binary) {
+    const pool = { yes: row.yes_reserve, no: row.no_reserve };
+    invested += exitValue(pool, 'YES', row.yes_shares) + exitValue(pool, 'NO', row.no_shares);
+  }
+
+  if (categorical.length) {
+    const season = (await get<{ current_season: number }>('SELECT current_season FROM groups WHERE id = ?', groupId))
+      ?.current_season ?? 1;
+    const optionsFor = await optionsByMarket(groupId, season);
+    for (const row of categorical) {
+      const options = optionsFor.get(row.market_id);
+      if (!options) continue;
+      invested += categoricalExitValueFrom(row.lmsr_b, options, row.option_id, row.shares);
+    }
+  }
+
+  const balance = cash?.balance ?? 0;
+  return { cash: balance, invested, total: balance + invested };
 }
 
 export interface Standing {
@@ -479,6 +540,8 @@ export interface Standing {
 
 /** Portfolio value for every member: cash plus mark-to-market on open legs. */
 export async function standings(groupId: number, startingBalance: number): Promise<Standing[]> {
+  const season = (await get<{ current_season: number }>('SELECT current_season FROM groups WHERE id = ?', groupId))
+    ?.current_season ?? 1;
   const members = await all<{ user_id: number; name: string; handle: string; role: string; balance: number; avatar: string | null }>(
     `SELECT ms.user_id, ms.role, ms.balance, u.name, u.handle, u.avatar
        FROM memberships ms JOIN users u ON u.id = ms.user_id
@@ -521,15 +584,14 @@ export async function standings(groupId: number, startingBalance: number): Promi
         AND m.status IN ('open','closed','resolving') AND op.shares > 0.0001`,
     groupId,
   );
-  const categoricalMarkets = new Map<number, Awaited<ReturnType<typeof optionsWithPrices>>>();
+  // One query for every option in the group, then pure maths per position.
+  const optionsFor = categoricalLive.length
+    ? await optionsByMarket(groupId, season)
+    : new Map<number, MarketOptionRow[]>();
   for (const position of categoricalLive) {
-    const prices = categoricalMarkets.get(position.market_id) ?? await optionsWithPrices({ id: position.market_id, lmsr_b: position.lmsr_b });
-    categoricalMarkets.set(position.market_id, prices);
-    const value = await categoricalExitValue(
-      { id: position.market_id, lmsr_b: position.lmsr_b },
-      position.option_id,
-      position.shares,
-    );
+    const options = optionsFor.get(position.market_id);
+    if (!options) continue;
+    const value = categoricalExitValueFrom(position.lmsr_b, options, position.option_id, position.shares);
     invested.set(position.user_id, (invested.get(position.user_id) ?? 0) + value);
     openCount.set(position.user_id, (openCount.get(position.user_id) ?? 0) + 1);
   }
@@ -630,6 +692,45 @@ export async function marketOptions(marketId: number): Promise<MarketOptionRow[]
     'SELECT * FROM market_options WHERE market_id = ? ORDER BY sort_order',
     marketId,
   );
+}
+
+/**
+ * Every outcome of every categorical market in a group, in one query.
+ *
+ * The alternative — and what this replaced — was calling `marketOptions` once
+ * per position while walking the standings. On SQLite that is invisible; on
+ * Postgres it is one network round trip each, and a group with a handful of
+ * multiple-choice markets was firing thirty of them to render a sidebar.
+ */
+export async function optionsByMarket(groupId: number, season: number): Promise<Map<number, MarketOptionRow[]>> {
+  const rows = await all<MarketOptionRow>(
+    `SELECT o.* FROM market_options o
+       JOIN markets m ON m.id = o.market_id
+      WHERE m.group_id = ? AND m.season_number = ?
+      ORDER BY o.market_id, o.sort_order`,
+    groupId,
+    season,
+  );
+  const byMarket = new Map<number, MarketOptionRow[]>();
+  for (const row of rows) {
+    const list = byMarket.get(row.market_id);
+    if (list) list.push(row);
+    else byMarket.set(row.market_id, [row]);
+  }
+  return byMarket;
+}
+
+/** What the pool would pay to take a categorical holding back, computed in memory. */
+export function categoricalExitValueFrom(
+  liquidity: number,
+  options: MarketOptionRow[],
+  optionId: number,
+  shares: number,
+): number {
+  if (!(shares > 0.0001)) return 0;
+  const index = options.findIndex((option) => option.id === optionId);
+  if (index < 0) return 0;
+  return quoteCategoricalSell({ quantities: options.map((o) => o.quantity), liquidity }, index, shares).proceeds;
 }
 
 export function categoricalState(

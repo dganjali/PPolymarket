@@ -6,7 +6,7 @@ import { Check, Sparkle } from '@/components/Icon';
 
 export const metadata = {
   title: 'Pricing — Minimarket',
-  description: 'Minimarket is free for a friend group. Paid plans are for the ones that got big.',
+  description: 'Free for a friend group or a whole class. Paid plans start at $29 a year, per group.',
 };
 
 /** The lines under each tier, in the order they sell. */
@@ -47,11 +47,15 @@ const FAQ: [string, string][] = [
   ],
   [
     'We are a school. Can we pay by invoice?',
-    'Yes — that is what Campus is. One purchase order a year covers every group you run, and it is billed to the institution rather than to a person. Email sales@minimarket.app and we will send the paperwork.',
+    'Yes — that is what Campus is. One purchase order a year covers every group you run, and it is billed to the institution rather than to a person. It is deliberately priced under the signature threshold most departments use, so it does not need a committee. Email sales@minimarket.app and we will send the paperwork.',
   ],
   [
     'Can I switch plans later?',
     'Any time, in both directions. Upgrades take effect immediately. Downgrades take effect at the end of the period you already paid for, and the confirmation tells you exactly what will go over its limit first.',
+  ],
+  [
+    'What is a season pass?',
+    'A one-off payment that covers about four months, instead of a subscription. A class group runs one semester and then goes quiet all summer, and paying through the quiet half is annoying. The season pass just stops when the season does — there is nothing to remember to cancel.',
   ],
 ];
 
@@ -67,20 +71,23 @@ export default async function PricingPage() {
           ← Minimarket
         </Link>
         <h1 className="h-display pricing-title">
-          Free for a friend group.
+          Free for your group.
           <br />
-          Paid for the ones that got big.
+          Cheap if it gets big.
         </h1>
         <p className="pricing-lede">
-          Minimarket charges per group, never per person — inviting the whole grade should not cost
-          more than inviting five people. Trading is never limited on any plan.
+          Free covers 40 people and 8 live markets, which is most classes and every friend group.
+          Above that it is <b>$29 a year for the whole group</b> — less than one person&rsquo;s share of a
+          pizza. We charge per group, never per person, and trading is never limited on any plan.
         </p>
       </header>
 
       <section className="pricing-grid">
         {ORDER.map((id) => {
           const plan = PLANS[id];
-          const featured = id === 'pro';
+          // Plus is the one to point at now: it is the impulse buy, and the tier
+          // most groups that outgrow Free actually need.
+          const featured = id === 'plus';
           return (
             <article key={id} className="pricing-card liftable" data-featured={featured}>
               {featured && (
@@ -92,13 +99,13 @@ export default async function PricingPage() {
               <p className="pricing-tagline">{plan.tagline}</p>
 
               <div className="pricing-price mono">
-                {plan.selfServe ? priceLabel(plan.annualCents, 'yr') : '$999/yr'}
+                {priceLabel(plan.annualCents, 'yr')}
               </div>
               <div className="pricing-alt mono">
                 {plan.id === 'free'
                   ? 'No card, no trial, no expiry'
                   : plan.selfServe
-                    ? `or ${priceLabel(plan.monthlyCents, 'mo')} · save ${annualSaving(plan)}% annually`
+                    ? `${priceLabel(plan.seasonCents, 'season')} · ${priceLabel(plan.monthlyCents, 'mo')} · save ${annualSaving(plan)}% yearly`
                     : 'Invoice or purchase order'}
               </div>
 

@@ -401,12 +401,12 @@ async function main() {
     requireMemberApproval: false,
   });
 
-  // The demo group runs on Pro so the seed can show off every market type and
-  // more than the free tier's four live markets at once. The debate league
-  // below stays on Free deliberately — between them the two groups show both
-  // sides of the paywall without anyone having to go and change a setting.
+  // The demo group runs on Plus: it is the tier most groups that outgrow Free
+  // actually land on, and it does not advertise a feature that is not built yet.
+  // The debate league below stays on Free deliberately — between them the two
+  // groups show both sides of the paywall without changing a setting.
   await run(
-    "UPDATE groups SET plan = 'pro', plan_status = 'active', plan_since = datetime('now'), billing_provider = 'stub' WHERE id = ?",
+    "UPDATE groups SET plan = 'plus', plan_status = 'active', plan_since = datetime('now'), billing_provider = 'stub' WHERE id = ?",
     group.id,
   );
   // Re-read it: createGroup handed back the row as it was before the upgrade,

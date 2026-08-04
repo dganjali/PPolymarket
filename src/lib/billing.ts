@@ -14,9 +14,9 @@
 import { get, run } from './db';
 import { AppError } from './errors';
 import { stamp } from './format';
-import { PLANS, type PlanId } from './plans';
+import { CADENCE_DAYS, PLANS, type Cadence, type PlanId } from './plans';
 
-export type Cadence = 'monthly' | 'annual';
+export type { Cadence };
 
 export interface CheckoutRequest {
   groupId: number;
@@ -46,12 +46,17 @@ export interface BillingProvider {
 
 const stripeKey = process.env.STRIPE_SECRET_KEY;
 
-/** Stripe price ids, one per (plan, cadence). Set alongside the secret key. */
+/**
+ * Stripe price ids, one per (plan, cadence). Set alongside the secret key.
+ * The season prices are one-off, not subscriptions — see `checkout` below.
+ */
 const STRIPE_PRICES: Partial<Record<`${PlanId}_${Cadence}`, string | undefined>> = {
   plus_monthly: process.env.STRIPE_PRICE_PLUS_MONTHLY,
   plus_annual: process.env.STRIPE_PRICE_PLUS_ANNUAL,
+  plus_season: process.env.STRIPE_PRICE_PLUS_SEASON,
   pro_monthly: process.env.STRIPE_PRICE_PRO_MONTHLY,
   pro_annual: process.env.STRIPE_PRICE_PRO_ANNUAL,
+  pro_season: process.env.STRIPE_PRICE_PRO_SEASON,
 };
 
 /**
@@ -122,7 +127,7 @@ const stub: BillingProvider = {
 
     // A real subscription renews; the stub grants a period so `planOf` has an
     // end date to reason about, and so `past_due` behaviour is testable.
-    const period = request.cadence === 'annual' ? 365 : 30;
+    const period = CADENCE_DAYS[request.cadence];
     await applyPlan(request.groupId, request.plan, {
       actorId: request.actorId,
       reason: `stub checkout · ${request.cadence}`,
@@ -157,8 +162,10 @@ const stripe: BillingProvider = {
     if (!price) throw new AppError('That plan is not configured for checkout yet.');
 
     const base = process.env.APP_URL ?? 'http://localhost:3000';
+    // A season pass is a one-off payment, not a subscription: it buys a term
+    // and then stops, which is the whole point of offering it.
     const body = new URLSearchParams({
-      mode: 'subscription',
+      mode: request.cadence === 'season' ? 'payment' : 'subscription',
       'line_items[0][price]': price,
       'line_items[0][quantity]': '1',
       success_url: `${base}${request.returnPath}?upgraded=${request.plan}`,
@@ -166,9 +173,12 @@ const stripe: BillingProvider = {
       client_reference_id: String(request.groupId),
       'metadata[group_id]': String(request.groupId),
       'metadata[plan]': request.plan,
-      'subscription_data[metadata][group_id]': String(request.groupId),
-      'subscription_data[metadata][plan]': request.plan,
     });
+    if (request.cadence !== 'season') {
+      body.set('subscription_data[metadata][group_id]', String(request.groupId));
+      body.set('subscription_data[metadata][plan]', request.plan);
+    }
+    body.set('metadata[cadence]', request.cadence);
     if (request.email) body.set('customer_email', request.email);
 
     const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
