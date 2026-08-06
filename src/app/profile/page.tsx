@@ -4,7 +4,7 @@ import { currentUser } from '@/lib/auth';
 import { myGroups } from '@/lib/data';
 import { money0 } from '@/lib/format';
 import { ProfileForm } from '@/components/ProfileForm';
-import { Avatar } from '@/components/ui';
+import { Avatar } from '@/components/Avatar';
 
 export default async function ProfilePage() {
   const user = await currentUser();

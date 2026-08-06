@@ -41,6 +41,7 @@ export function MarketTrading({
   now,
   related,
   base,
+  initialKey,
   children,
 }: {
   slug: string;
@@ -70,9 +71,16 @@ export function MarketTrading({
   now: number;
   related: RelatedMarket[];
   base: string;
+  /** The leg to open on, when the link that got here named one (`?side=NO`). */
+  initialKey?: string;
   children: React.ReactNode;
 }) {
-  const [activeKey, setActiveKey] = useState(legs[0]?.key ?? 'YES');
+  const [activeKey, setActiveKey] = useState(
+    legs.some((leg) => leg.key === initialKey) ? initialKey! : legs[0]?.key ?? 'YES',
+  );
+  // The phone sheet. Owned here rather than inside the ticket, because the
+  // outcome rows below the chart are what opens it.
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const prices =
     book.kind === 'binary'
@@ -135,7 +143,14 @@ export function MarketTrading({
                   <button
                     type="button"
                     className={`mk-buy pressable ${binary && i === 1 ? 'pill-no' : 'pill-yes'}`}
-                    onClick={() => setActiveKey(leg.key)}
+                    // On a desktop the rail is always open, so picking the leg
+                    // is the whole job. On a phone the ticket is a sheet, and a
+                    // Buy button that only changed some off-screen state was
+                    // indistinguishable from a dead button.
+                    onClick={() => {
+                      setActiveKey(leg.key);
+                      setSheetOpen(true);
+                    }}
                     data-on={leg.key === activeKey}
                     disabled={!tradable}
                   >
@@ -158,7 +173,6 @@ export function MarketTrading({
 
       <aside className="mk-rail">
         <TradeTicket
-          key={activeKey}
           slug={slug}
           marketId={marketId}
           question={question}
@@ -168,7 +182,10 @@ export function MarketTrading({
           balance={balance}
           tradable={tradable}
           closedReason={closedReason}
-          initialKey={activeKey}
+          activeKey={activeKey}
+          onPick={setActiveKey}
+          open={sheetOpen}
+          onOpenChange={setSheetOpen}
         />
 
         {related.length > 0 && (

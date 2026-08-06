@@ -106,28 +106,37 @@ export async function sparkSeriesFor(
   const binary = markets.filter((m) => m.market_type !== 'categorical');
   const multi = markets.filter((m) => m.market_type === 'categorical');
 
+  // The two kinds share nothing, so they are fetched together. Run in sequence, as
+  // they were, a mixed grid cost two round trips where one would do — and this runs
+  // on the group's landing screen.
+  const [binaryRows, multiRows] = await Promise.all([
+    binary.length
+      ? all<PricePointRow & { market_id: number }>(
+          `SELECT market_id, price, created_at FROM price_points
+            WHERE market_id IN (${binary.map(() => '?').join(',')}) ORDER BY market_id, id`,
+          ...binary.map((m) => m.id),
+        )
+      : Promise.resolve([]),
+    multi.length
+      // The leading outcome per market, by its most recent price.
+      ? all<OptionPricePointRow & { market_id: number }>(
+          `SELECT o.market_id, p.option_id, p.price, p.created_at
+             FROM option_price_points p
+             JOIN market_options o ON o.id = p.option_id
+            WHERE o.market_id IN (${multi.map(() => '?').join(',')})
+            ORDER BY o.market_id, p.id`,
+          ...multi.map((m) => m.id),
+        )
+      : Promise.resolve([]),
+  ]);
+
   if (binary.length) {
-    const marks = binary.map(() => '?').join(',');
-    const rows = await all<PricePointRow & { market_id: number }>(
-      `SELECT market_id, price, created_at FROM price_points
-        WHERE market_id IN (${marks}) ORDER BY id`,
-      ...binary.map((m) => m.id),
-    );
     for (const market of binary) out.set(market.id, [{ t: parseStamp(market.created_at), v: market.open_price }]);
-    for (const row of rows) out.get(row.market_id)?.push(toPoint(row));
+    for (const row of binaryRows) out.get(row.market_id)?.push(toPoint(row));
   }
 
   if (multi.length) {
-    const marks = multi.map(() => '?').join(',');
-    // The leading outcome per market, by its most recent price.
-    const rows = await all<OptionPricePointRow & { market_id: number }>(
-      `SELECT o.market_id, p.option_id, p.price, p.created_at
-         FROM option_price_points p
-         JOIN market_options o ON o.id = p.option_id
-        WHERE o.market_id IN (${marks})
-        ORDER BY p.id`,
-      ...multi.map((m) => m.id),
-    );
+    const rows = multiRows;
     const byMarket = new Map<number, Map<number, Point[]>>();
     for (const row of rows) {
       const options = byMarket.get(row.market_id) ?? new Map<number, Point[]>();

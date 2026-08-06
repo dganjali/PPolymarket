@@ -39,6 +39,7 @@ import {
   transferOwnership,
   requireAdmin,
   updateGroup,
+  updateMarket,
 } from '@/lib/engine';
 import type { Side } from '@/lib/amm';
 import { applyPlan, provider } from '@/lib/billing';
@@ -178,6 +179,8 @@ export async function createGroupAction(_prev: FormState, fd: FormData): Promise
       seasonEnds: str(fd, 'seasonEnds') || null,
       prize: str(fd, 'prize'),
       punishment: str(fd, 'punishment'),
+      requireApproval: !!fd.get('requireApproval'),
+      requireMemberApproval: !!fd.get('requireMemberApproval'),
       visibility: str(fd, 'visibility') === 'public' ? 'public' : 'private',
       description: str(fd, 'description'),
     }),
@@ -256,6 +259,31 @@ export async function updateSettingsAction(_prev: FormState, fd: FormData): Prom
   return { ok: 'Settings saved.' };
 }
 
+/**
+ * The one-switch version of "member markets need your approval".
+ *
+ * The same flag lives in the settings form further down the admin screen, but
+ * the moment an admin wants it off is the moment they are staring at a queue of
+ * markets waiting on them — so it is also a single button right there.
+ */
+export async function setMarketApprovalAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const group = await groupBySlug(slug);
+  if (!group) return { error: 'Group not found.' };
+
+  const on = str(fd, 'requireApproval') === '1';
+  const res = await guard(() => updateGroup(user.id, group.id, { require_approval: on ? 1 : 0 }));
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  revalidatePath(`/g/${slug}`, 'layout');
+  return {
+    ok: on
+      ? 'New member markets will wait for an admin.'
+      : 'Members can open markets without waiting for an admin.',
+  };
+}
+
 export async function updatePrizesAction(_prev: FormState, fd: FormData): Promise<FormState> {
   const user = await me();
   const slug = str(fd, 'slug');
@@ -319,6 +347,31 @@ export async function createMarketAction(_prev: FormState, fd: FormData): Promis
   const market = res as { id: number; status: string };
   if (market.status === 'open') redirect(`/g/${slug}/m/${market.id}`);
   redirect(`/g/${slug}?proposed=1`);
+}
+
+/** Corrects a market's wording, rules, category or deadline. See updateMarket. */
+export async function editMarketAction(_prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await me();
+  const slug = str(fd, 'slug');
+  const marketId = num(fd, 'marketId');
+
+  const chosen = str(fd, 'closesOn');
+  if (!chosen) return { error: 'Give the market a closing date.' };
+  const deadline = new Date(`${chosen}T23:59:59Z`);
+  if (Number.isNaN(deadline.getTime())) return { error: 'That closing date is not a real date.' };
+
+  const res = await guard(() =>
+    updateMarket(user.id, marketId, {
+      question: str(fd, 'question'),
+      category: str(fd, 'category') || 'Other',
+      rules: str(fd, 'rules'),
+      closesAt: deadline.toISOString().slice(0, 19).replace('T', ' '),
+    }),
+  );
+  if (res && typeof res === 'object' && 'error' in res) return res as FormState;
+
+  revalidatePath(`/g/${slug}`, 'layout');
+  return { ok: 'Saved. The change is in the group log.' };
 }
 
 export async function marketAdminAction(_prev: FormState, fd: FormData): Promise<FormState> {

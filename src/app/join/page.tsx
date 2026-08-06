@@ -10,7 +10,7 @@ import {
 } from '@/lib/data';
 import { dateLabel, money0, relative } from '@/lib/format';
 import { JoinForm } from '@/components/JoinForm';
-import { Avatar } from '@/components/ui';
+import { Avatar } from '@/components/Avatar';
 
 export default async function JoinPage({
   searchParams,
@@ -108,9 +108,13 @@ export default async function JoinPage({
             </div>
           )}
 
-          {!!preview.require_member_approval && (
+          {/* This screen is only ever reached with a code in hand, and a working
+              code is already an admin's say-so — `joinGroup` admits on it
+              rather than queueing. The old line here promised the opposite. */}
+          {!!preview.require_member_approval && state === 'active' && (
             <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.55 }}>
-              An admin approves new members here, so your bankroll is issued once they do.
+              This group screens people who find it on their own, but you have a link — you are in as
+              soon as you press the button.
             </div>
           )}
         </div>

@@ -16,6 +16,7 @@ import { dateLabel, money0, relative, volLabel } from '@/lib/format';
 import { AdminMarketControls } from '@/components/AdminControls';
 import {
   AnnouncementForm,
+  ApprovalToggle,
   InviteManager,
   MemberList,
   MembershipRequests,
@@ -73,9 +74,24 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         </span>
       </div>
 
+      {/* Settings sit at the bottom of a long screen, which is where an admin
+          looking for "can I even change this?" never scrolls to. */}
+      <nav className="mk-sibs" aria-label="Admin sections">
+        {[
+          ['#questions', 'Questions'],
+          ['#people', 'People'],
+          ['#season', 'The season'],
+          ['#settings', 'Settings'],
+        ].map(([href, label]) => (
+          <a key={href} href={href} className="mk-sib pressable">
+            {label}
+          </a>
+        ))}
+      </nav>
+
       <MembershipRequests slug={slug} requests={joinRequests} />
 
-      <h2 className="h-head" style={{ marginTop: 'var(--s-2)' }}>Questions</h2>
+      <h2 className="h-head" id="questions" style={{ marginTop: 'var(--s-2)' }}>Questions</h2>
 
       <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -105,6 +121,8 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
             Nothing in the queue.
           </div>
         )}
+        <div className="divider" />
+        <ApprovalToggle slug={slug} requireApproval={!!group.require_approval} />
       </div>
 
       <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -145,7 +163,7 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         </div>
       </div>
 
-      <h2 className="h-head" style={{ marginTop: 'var(--s-2)' }}>People</h2>
+      <h2 className="h-head" id="people" style={{ marginTop: 'var(--s-2)' }}>People</h2>
 
       <InviteManager
         slug={slug}
@@ -177,7 +195,7 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
         }))}
       />
 
-      <h2 className="h-head" style={{ marginTop: 'var(--s-2)' }}>The season</h2>
+      <h2 className="h-head" id="season" style={{ marginTop: 'var(--s-2)' }}>The season</h2>
 
       <PrizeEditor slug={slug} prizes={prizes.map((p) => p.label)} />
 
@@ -185,7 +203,7 @@ export default async function AdminPage({ params }: { params: Promise<{ slug: st
 
       <AnnouncementForm slug={slug} />
 
-      <h2 className="h-head" style={{ marginTop: 'var(--s-2)' }}>Settings</h2>
+      <h2 className="h-head" id="settings" style={{ marginTop: 'var(--s-2)' }}>Settings</h2>
 
       <SettingsForm
         slug={slug}

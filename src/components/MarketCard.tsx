@@ -5,7 +5,7 @@ import { colorFor, recentDelta, type Point } from '@/lib/chart';
 import { optionsWithPrices, type MarketRow } from '@/lib/data';
 import { centsLabel, relative, signedCents, volLabel } from '@/lib/format';
 import { MarketGlyph } from './MarketGlyph';
-import { Spark } from './PriceChart';
+import { Spark } from './Spark';
 
 /**
  * One market in a list.
@@ -116,11 +116,14 @@ export async function MarketCard({
       </Link>
 
       {open ? (
+        // The side rides along in the URL. Both buttons used to land on the same
+        // page with Yes preselected, so pressing No looked like it had done
+        // nothing at all.
         <div className="mc-buys">
-          <Link href={href} className="mc-buy pill-yes pressable">
+          <Link href={`${href}?side=YES`} className="mc-buy pill-yes pressable">
             Yes <b className="mono">{centsLabel(p)}</b>
           </Link>
-          <Link href={href} className="mc-buy pill-no pressable">
+          <Link href={`${href}?side=NO`} className="mc-buy pill-no pressable">
             No <b className="mono">{centsLabel(1 - p)}</b>
           </Link>
         </div>

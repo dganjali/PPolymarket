@@ -2,7 +2,7 @@ import { groupContext } from '@/lib/context';
 import { groupPrizes, seasonArchive, seasonHistory, standings } from '@/lib/data';
 import { dateLabel, longDateLabel, money0, signedMoney } from '@/lib/format';
 import { Podium } from '@/components/Dashboard';
-import { Avatar } from '@/components/ui';
+import { Avatar } from '@/components/Avatar';
 
 /** Who is winning, what they win, and everyone who has won before. */
 export default async function StandingsPage({ params }: { params: Promise<{ slug: string }> }) {

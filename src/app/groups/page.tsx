@@ -4,7 +4,7 @@ import { currentUser } from '@/lib/auth';
 import { myGroups, unreadNotificationCount } from '@/lib/data';
 import { money0 } from '@/lib/format';
 import { Bell, Person, Plus } from '@/components/Icon';
-import { Avatar } from '@/components/ui';
+import { Avatar } from '@/components/Avatar';
 import { logoutAction } from '../actions';
 
 export default async function GroupsPage() {

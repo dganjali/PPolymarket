@@ -1,16 +1,29 @@
 import Link from 'next/link';
 import { groupContext } from '@/lib/context';
-import { CATEGORIES, standings } from '@/lib/data';
-import { get } from '@/lib/db';
+import { CATEGORIES } from '@/lib/data';
+import { all, get } from '@/lib/db';
 import { NewMarketForm } from '@/components/NewMarketForm';
 
 export default async function NewMarketPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const { group, ms, isAdmin, base } = await groupContext(slug);
 
-  const owner = await get<{ handle: string }>('SELECT handle FROM users WHERE id = ?', group.owner_id);
+  // The form only needs each member's name and handle, for the "who is connected to
+  // this outcome" picker. It used to call standings(), which marks every position
+  // held by every member to market — five round trips and the group's whole
+  // portfolio, to fill a dropdown.
+  const [owner, members] = await Promise.all([
+    get<{ handle: string }>('SELECT handle FROM users WHERE id = ?', group.owner_id),
+    isAdmin
+      ? all<{ userId: number; name: string; handle: string }>(
+          `SELECT ms.user_id AS "userId", u.name, u.handle
+             FROM memberships ms JOIN users u ON u.id = ms.user_id
+            WHERE ms.group_id = ? ORDER BY u.name, u.handle`,
+          group.id,
+        )
+      : Promise.resolve([]),
+  ]);
   const needsApproval = !isAdmin && !!group.require_approval;
-  const members = isAdmin ? await standings(group.id, group.starting_balance) : [];
 
   return (
     <div className="wrap" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
@@ -32,11 +45,7 @@ export default async function NewMarketPage({ params }: { params: Promise<{ slug
         houseLiquidity={group.market_liquidity}
         needsApproval={needsApproval}
         adminHandle={owner?.handle ?? 'admin'}
-        members={members.map((member) => ({
-          userId: member.userId,
-          name: member.name,
-          handle: member.handle,
-        }))}
+        members={members}
       />
     </div>
   );

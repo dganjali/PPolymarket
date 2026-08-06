@@ -121,6 +121,14 @@ export async function createGroup(
     seasonEnds: string | null;
     prize: string;
     punishment: string;
+    /**
+     * Whether members' markets wait for an admin. Off unless asked for: a group
+     * where every question needs the founder awake to go live stops being a
+     * market and starts being a suggestion box, and the column's own default
+     * (on, inherited from the first release) is what made every new group feel
+     * like one.
+     */
+    requireApproval?: boolean;
     requireMemberApproval?: boolean;
     visibility?: 'public' | 'private';
     description?: string;
@@ -143,9 +151,9 @@ export async function createGroup(
       // season_started_at is written explicitly: on databases where the column
       // arrived by migration its default is '', not now().
       `INSERT INTO groups (slug, name, invite_code, owner_id, starting_balance, market_liquidity,
-                           season_ends, prize, punishment, require_member_approval, visibility, description,
-                           season_started_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+                           season_ends, prize, punishment, require_approval, require_member_approval,
+                           visibility, description, season_started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       slug,
       name,
       code,
@@ -155,6 +163,7 @@ export async function createGroup(
       input.seasonEnds || null,
       input.prize.trim(),
       input.punishment.trim(),
+      input.requireApproval ? 1 : 0,
       input.requireMemberApproval === false ? 0 : 1,
       input.visibility === 'public' ? 'public' : 'private',
       (input.description ?? '').trim().slice(0, 280),
@@ -680,7 +689,10 @@ export async function sweepClosures(groupId: number) {
   if (!due.length) return;
   await tx(async () => {
     for (const m of due) {
-      await run("UPDATE markets SET status = 'closed' WHERE id = ?", m.id);
+      // Gate on the status we expect so two concurrent sweeps of the same group
+      // don't each log a "closed for trading" event for the same market.
+      const flipped = await run("UPDATE markets SET status = 'closed' WHERE id = ? AND status = 'open'", m.id);
+      if (flipped.changes === 0) continue;
       await logEvent(groupId, m.id, null, 'close', `“${m.question}” closed for trading`);
     }
   });
@@ -700,6 +712,107 @@ export async function reopenMarket(userId: number, marketId: number, closesAt: s
     );
     await run('DELETE FROM market_disputes WHERE market_id = ?', marketId);
     await logEvent(m.group_id, marketId, userId, 'market', `reopened “${m.question}”`);
+  });
+}
+
+export interface MarketEdit {
+  question: string;
+  category: string;
+  rules: string;
+  closesAt: string;
+}
+
+/**
+ * Corrects a market after it has been posted.
+ *
+ * Wording only. Nothing here touches the pool, the prices, the outcomes or the
+ * money — a market with real positions in it must keep meaning what people
+ * bought, so what can change is the sentence, the category, the small print and
+ * the deadline, and every change is written to the group log under the editor's
+ * name.
+ *
+ * Who may: the person who wrote it, up until somebody trades it — a typo caught
+ * ten seconds after posting is not an event that needs an admin. From the first
+ * fill onwards it takes an admin, because an edit is then a change to something
+ * other people are holding, and it should carry the same authority and audit
+ * trail that resolving it does. Once a result is under review or in, the wording
+ * is frozen: rewriting the question while the group is voting on whether it came
+ * true is the one edit that could actually take money off somebody.
+ */
+export async function updateMarket(userId: number, marketId: number, input: MarketEdit) {
+  const m = await marketById(marketId) ?? fail('Market not found.');
+  const ms = await requireMember(userId, m.group_id);
+  const isAdmin = ms.role === 'admin';
+
+  if (m.status === 'resolved') fail('A settled market cannot be edited.');
+  if (m.status === 'rejected') fail('A rejected market cannot be edited.');
+  if (m.status === 'resolving') {
+    fail('This market has a result under review. Reopen it first if the wording has to change.');
+  }
+  if (!isAdmin) {
+    if (m.creator_id !== userId) fail('Only an admin can edit somebody else’s market.');
+    if (m.volume > 0) fail('People have traded this already, so only an admin can edit it now.');
+  }
+
+  const question = input.question.trim();
+  if (question.length < 8) fail('Write a question the group can actually settle.');
+  const asked = input.closesAt.trim();
+  if (!asked) fail('Give the market a closing date.');
+  // The form only offers a day, so it round-trips the stored time to end-of-day.
+  // Leaving the date field alone must not quietly move the deadline.
+  const closesAt = asked.slice(0, 10) === m.closes_at.slice(0, 10) ? m.closes_at : asked;
+  if (m.status === 'open' || m.status === 'pending') {
+    const deadline = new Date(`${closesAt.replace(' ', 'T')}Z`).getTime();
+    if (Number.isNaN(deadline)) fail('That closing date is not a real date.');
+    if (deadline < Date.now()) fail('Pick a closing date in the future.');
+  }
+
+  const changed = [
+    question !== m.question ? 'the question' : null,
+    input.rules.trim() !== m.rules ? 'the rules' : null,
+    input.category !== m.category ? 'the category' : null,
+    closesAt !== m.closes_at ? 'the closing date' : null,
+  ].filter(Boolean) as string[];
+  if (!changed.length) return;
+  const summary =
+    changed.length > 1 ? `${changed.slice(0, -1).join(', ')} and ${changed[changed.length - 1]}` : changed[0];
+
+  await tx(async () => {
+    await run(
+      `UPDATE markets SET question = ?, category = ?, rules = ?, closes_at = ?,
+              edited_at = datetime('now') WHERE id = ?`,
+      question,
+      input.category || 'Other',
+      input.rules.trim(),
+      closesAt,
+      marketId,
+    );
+    await logEvent(
+      m.group_id,
+      marketId,
+      userId,
+      'market',
+      `edited ${summary} on “${question}”`,
+    );
+
+    // Anybody holding a position bought the old wording. They get told.
+    const holders = await all<{ user_id: number }>(
+      `SELECT user_id FROM positions WHERE market_id = ? AND (yes_shares > 0.0001 OR no_shares > 0.0001)
+       UNION
+       SELECT user_id FROM option_positions WHERE market_id = ? AND shares > 0.0001`,
+      marketId,
+      marketId,
+    );
+    for (const holder of holders) {
+      if (holder.user_id === userId) continue;
+      await notifyUser(
+        holder.user_id,
+        m.group_id,
+        marketId,
+        'market',
+        `“${question}” was edited — ${summary} changed while you hold a position.`,
+      );
+    }
   });
 }
 
@@ -959,13 +1072,24 @@ async function settleCategoricalMarket(m: MarketRow, outcome: string, actorId: n
   ) ?? fail('Choose a valid outcome.');
 
   await tx(async () => {
+    // Claim first, exactly as the binary path does — see settleMarket for why.
+    const claimed = await all<{ collateral: number; subsidy: number; house: number; creator_id: number }>(
+      `UPDATE markets SET status = 'resolved', outcome = ?, resolved_at = datetime('now')
+        WHERE id = ? AND status <> 'resolved'
+       RETURNING collateral, subsidy, house, creator_id`,
+      String(optionId),
+      m.id,
+    );
+    if (!claimed.length) return;
+    const { collateral, subsidy, house, creator_id } = claimed[0];
+
     const holders = await all<{ user_id: number; shares: number; cost: number }>(
       'SELECT user_id, shares, cost FROM option_positions WHERE option_id = ? AND shares > 0.0001',
       optionId,
     );
     const outstanding = holders.reduce((sum, holder) => sum + holder.shares, 0);
-    const paid = Math.min(m.collateral, outstanding);
-    const remainder = Math.max(0, m.collateral - paid);
+    const paid = Math.min(collateral, outstanding);
+    const remainder = Math.max(0, collateral - paid);
     const scale = outstanding > 0 ? paid / outstanding : 0;
 
     for (const holder of holders) {
@@ -990,22 +1114,18 @@ async function settleCategoricalMarket(m: MarketRow, outcome: string, actorId: n
       optionId,
     );
 
-    const lpTotal = m.subsidy + m.house;
-    const creatorCut = lpTotal > 0 ? (remainder * m.subsidy) / lpTotal : remainder;
+    const lpTotal = subsidy + house;
+    const creatorCut = lpTotal > 0 ? (remainder * subsidy) / lpTotal : remainder;
     if (creatorCut > 0.0001) {
       await run(
         'UPDATE memberships SET balance = balance + ? WHERE user_id = ? AND group_id = ?',
         creatorCut,
-        m.creator_id,
+        creator_id,
         m.group_id,
       );
     }
 
-    await run(
-      "UPDATE markets SET status = 'resolved', outcome = ?, resolved_at = datetime('now'), collateral = 0 WHERE id = ?",
-      String(optionId),
-      m.id,
-    );
+    await run('UPDATE markets SET collateral = 0 WHERE id = ?', m.id);
     for (const marketOption of await marketOptions(m.id)) {
       await run(
         'INSERT INTO option_price_points (option_id, price) VALUES (?, ?)',
@@ -1036,6 +1156,26 @@ async function settleMarket(m: MarketRow, outcome: string, actorId: number | nul
   if (outcome !== 'YES' && outcome !== 'NO') fail('Choose YES or NO.');
 
   await tx(async () => {
+    // Claim the market before paying anybody. The status predicate makes this the
+    // mutex: two concurrent settlements both pass the checks above (each holding
+    // its own pre-transaction snapshot), but only one sees a row back here, and
+    // the loser pays nobody. Without it, a market that came due while two renders
+    // of the same group were in flight paid every holder twice.
+    //
+    // The money columns come back from the claim rather than from `m` for the same
+    // reason: a trade committing between the caller's read and this transaction
+    // changes `collateral`, and the payout scale has to be computed from the value
+    // that is actually in the row.
+    const claimed = await all<{ collateral: number; subsidy: number; house: number; creator_id: number }>(
+      `UPDATE markets SET status = 'resolved', outcome = ?, resolved_at = datetime('now')
+        WHERE id = ? AND status <> 'resolved'
+       RETURNING collateral, subsidy, house, creator_id`,
+      outcome,
+      marketId,
+    );
+    if (!claimed.length) return;
+    const { collateral, subsidy, house, creator_id } = claimed[0];
+
     const col = outcome === 'YES' ? 'yes_shares' : 'no_shares';
     const holders = await all<{ user_id: number; shares: number; cost: number }>(
       `SELECT user_id, ${col} AS shares, ${outcome === 'YES' ? 'yes_cost' : 'no_cost'} AS cost
@@ -1044,7 +1184,7 @@ async function settleMarket(m: MarketRow, outcome: string, actorId: number | nul
     );
 
     const outstanding = holders.reduce((s, h) => s + h.shares, 0);
-    const { paid, remainder } = settle(m.collateral, outstanding);
+    const { paid, remainder } = settle(collateral, outstanding);
     // Pay pro-rata if a market were ever short; by construction it never is.
     const scale = outstanding > 0 ? paid / outstanding : 0;
 
@@ -1075,22 +1215,21 @@ async function settleMarket(m: MarketRow, outcome: string, actorId: number | nul
     // Unsold pool shares plus accumulated fees are the LP return. The creator
     // gets the slice matching their stake; the group's underwriting evaporates
     // back to the house it came from.
-    const lpTotal = m.subsidy + m.house;
-    const creatorCut = lpTotal > 0 ? (remainder * m.subsidy) / lpTotal : remainder;
+    const lpTotal = subsidy + house;
+    const creatorCut = lpTotal > 0 ? (remainder * subsidy) / lpTotal : remainder;
     if (creatorCut > 0.0001) {
       await run(
         'UPDATE memberships SET balance = balance + ? WHERE user_id = ? AND group_id = ?',
         creatorCut,
-        m.creator_id,
+        creator_id,
         m.group_id,
       );
     }
 
-    await run(
-      "UPDATE markets SET status = 'resolved', outcome = ?, resolved_at = datetime('now'), collateral = 0 WHERE id = ?",
-      outcome,
-      marketId,
-    );
+    // The status flip already happened in the claim above; only the collateral is
+    // left to release, and it has to be last so the payout maths above reads the
+    // pre-settlement value.
+    await run('UPDATE markets SET collateral = 0 WHERE id = ?', marketId);
     await run('INSERT INTO price_points (market_id, price) VALUES (?, ?)', marketId, outcome === 'YES' ? 1 : 0);
     await logEvent(m.group_id, marketId, actorId, 'resolve', `resolved “${m.question}” → ${outcome}`);
     const recipients = new Set(
@@ -1313,13 +1452,19 @@ export async function buyCategorical(
   if (!(quote.shares > 0)) fail('That order is too small to fill.');
 
   return tx(async () => {
-    await run(
-      `UPDATE markets SET collateral = collateral + ?, fees = fees + ?, volume = volume + ? WHERE id = ?`,
+    // The status and deadline are re-checked here, as part of the first write, so
+    // the market cannot be closed or expire between the read above and this
+    // transaction. `status` alone is not enough: it only becomes 'closed' when a
+    // sweep runs, and sweeps now run after the response.
+    const open = await run(
+      `UPDATE markets SET collateral = collateral + ?, fees = fees + ?, volume = volume + ?
+        WHERE id = ? AND status = 'open' AND closes_at > datetime('now')`,
       spend,
       quote.fee,
       spend,
       marketId,
     );
+    if (open.changes === 0) fail('This market is not open for trading.');
     await run('UPDATE market_options SET quantity = ? WHERE id = ?', quote.quantitiesAfter[optionIndex], optionId);
     await run('UPDATE memberships SET balance = balance - ? WHERE id = ?', spend, ms.id);
     // Both sides of each sum are qualified on purpose. Postgres reads a bare
@@ -1400,13 +1545,16 @@ export async function sellCategorical(
   if (!(quote.proceeds > 0)) fail('That order is too small to fill.');
 
   return tx(async () => {
-    await run(
-      `UPDATE markets SET collateral = collateral - ?, fees = fees + ?, volume = volume + ? WHERE id = ?`,
+    // See buyCategorical: the deadline is enforced by the write itself.
+    const open = await run(
+      `UPDATE markets SET collateral = collateral - ?, fees = fees + ?, volume = volume + ?
+        WHERE id = ? AND status = 'open' AND closes_at > datetime('now')`,
       quote.proceeds,
       quote.fee,
       quote.proceeds,
       marketId,
     );
+    if (open.changes === 0) fail('This market is not open for trading.');
     await run('UPDATE market_options SET quantity = ? WHERE id = ?', quote.quantitiesAfter[optionIndex], optionId);
     await run('UPDATE memberships SET balance = balance + ? WHERE id = ?', quote.proceeds, ms.id);
     const releasedCost = held > 0 ? ((position?.cost ?? 0) * qty) / held : 0;
@@ -1469,9 +1617,11 @@ export async function buy(userId: number, marketId: number, side: Side, amount: 
   if (!(q.shares > 0)) fail('That order is too small to fill.');
 
   return tx(async () => {
-    await run(
+    // See buyCategorical: the deadline is enforced by the write itself.
+    const open = await run(
       `UPDATE markets SET yes_reserve = ?, no_reserve = ?, collateral = collateral + ?,
-              fees = fees + ?, volume = volume + ? WHERE id = ?`,
+              fees = fees + ?, volume = volume + ?
+        WHERE id = ? AND status = 'open' AND closes_at > datetime('now')`,
       q.reservesAfter.yes,
       q.reservesAfter.no,
       spend,
@@ -1479,6 +1629,7 @@ export async function buy(userId: number, marketId: number, side: Side, amount: 
       spend,
       marketId,
     );
+    if (open.changes === 0) fail('This market is not open for trading.');
     await run('UPDATE memberships SET balance = balance - ? WHERE id = ?', spend, ms.id);
 
     await upsertPosition(marketId, userId);
@@ -1547,9 +1698,11 @@ export async function sell(userId: number, marketId: number, side: Side, sharesI
   if (!(q.proceeds > 0)) fail('That order is too small to fill.');
 
   return tx(async () => {
-    await run(
+    // See buyCategorical: the deadline is enforced by the write itself.
+    const open = await run(
       `UPDATE markets SET yes_reserve = ?, no_reserve = ?, collateral = collateral - ?,
-              fees = fees + ?, volume = volume + ? WHERE id = ?`,
+              fees = fees + ?, volume = volume + ?
+        WHERE id = ? AND status = 'open' AND closes_at > datetime('now')`,
       q.reservesAfter.yes,
       q.reservesAfter.no,
       q.proceeds,
@@ -1557,6 +1710,7 @@ export async function sell(userId: number, marketId: number, side: Side, sharesI
       q.proceeds,
       marketId,
     );
+    if (open.changes === 0) fail('This market is not open for trading.');
     await run('UPDATE memberships SET balance = balance + ? WHERE id = ?', q.proceeds, ms.id);
 
     // Release cost basis proportionally so avg price survives a partial sell.

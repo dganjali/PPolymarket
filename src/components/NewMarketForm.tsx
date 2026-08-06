@@ -222,7 +222,9 @@ export function NewMarketForm({
       </div>}
 
       <div className="field">
-        <label htmlFor="funding">What you put in — comes out of your cash</label>
+        {/* "Comes out of your cash" was the whole label, and it read as a fee.
+            It is a stake in the pool, and it comes back. */}
+        <label htmlFor="funding">What you stake — held by the market, not spent</label>
         <div className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', gap: 7 }}>
             {[10, 25, 50, 100].map((v) => (

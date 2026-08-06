@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS groups (
   prize             TEXT NOT NULL DEFAULT '',
   punishment        TEXT NOT NULL DEFAULT '',
   positions_public  INTEGER NOT NULL DEFAULT 1,
-  require_approval  INTEGER NOT NULL DEFAULT 1,
+  -- Members' markets go live on their own. See createGroup in engine.ts.
+  require_approval  INTEGER NOT NULL DEFAULT 0,
   require_member_approval INTEGER NOT NULL DEFAULT 1,
   dispute_window_hours INTEGER NOT NULL DEFAULT 24,
   current_season    INTEGER NOT NULL DEFAULT 1,
@@ -96,6 +97,11 @@ CREATE TABLE IF NOT EXISTS memberships (
   joined_at  TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (user_id, group_id)
 );
+-- The UNIQUE above leads with user_id, so it cannot serve "WHERE group_id = ?" —
+-- which is what memberCount, standings and groupUsage all ask. Without this they
+-- scan every membership in the database on every group page. The trailing columns
+-- make the member list and the admin count index-only reads.
+CREATE INDEX IF NOT EXISTS idx_memberships_group ON memberships(group_id, role, user_id, balance);
 
 CREATE TABLE IF NOT EXISTS membership_requests (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,9 +148,15 @@ CREATE TABLE IF NOT EXISTS markets (
   dispute_ends_at TEXT,
   season_number INTEGER NOT NULL DEFAULT 1,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  edited_at    TEXT,
   resolved_at  TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_markets_group ON markets(group_id, status);
+-- Every hot market read also filters on season_number, so an index on
+-- (group_id, status) alone made each one scan and discard every prior season.
+-- sweepClosures is the exception — it has no season predicate and orders on
+-- closes_at — so it gets its own.
+CREATE INDEX IF NOT EXISTS idx_markets_group_season ON markets(group_id, season_number, status, id DESC);
+CREATE INDEX IF NOT EXISTS idx_markets_group_status ON markets(group_id, status, closes_at);
 
 CREATE TABLE IF NOT EXISTS market_restrictions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,6 +202,10 @@ CREATE TABLE IF NOT EXISTS option_positions (
   UNIQUE (option_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_option_positions_user ON option_positions(user_id, market_id);
+-- Neither the UNIQUE above nor idx_option_positions_user leads with market_id, so
+-- standings' categorical join had no index to use and scanned every option
+-- position in the database.
+CREATE INDEX IF NOT EXISTS idx_option_positions_market ON option_positions(market_id, option_id, user_id);
 
 CREATE TABLE IF NOT EXISTS trades (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +221,8 @@ CREATE TABLE IF NOT EXISTS trades (
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id, id DESC);
+-- standings counts trades per member; the index above orders by id, not user_id.
+CREATE INDEX IF NOT EXISTS idx_trades_market_user ON trades(market_id, user_id);
 
 CREATE TABLE IF NOT EXISTS price_points (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -263,6 +281,10 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, id DESC);
+-- The one above serves the unread count, but read_at sits between the equality and
+-- the sort column, so listing a user's notifications newest-first still needed a
+-- temp sort.
+CREATE INDEX IF NOT EXISTS idx_notifications_user_recent ON notifications(user_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS season_results (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -336,6 +358,7 @@ const ADDITIONS: [table: string, column: string, ddl: string][] = [
   ['markets', 'resolution_proposed_at', 'TEXT'],
   ['markets', 'dispute_ends_at', 'TEXT'],
   ['markets', 'season_number', 'INTEGER NOT NULL DEFAULT 1'],
+  ['markets', 'edited_at', 'TEXT'],
   ['trades', 'option_id', 'INTEGER'],
 
   // Plans and entitlements. A group carries its own plan; `plan_status` is what
@@ -468,13 +491,37 @@ export const db: DatabaseSync = (
     : globalThis.__minimarketDb ?? (globalThis.__minimarketDb = open())
 ) as DatabaseSync;
 
+/**
+ * A hosted database is reached over the public internet, so TLS is not optional.
+ * Relying on `?sslmode=` being present in the connection string means a URL pasted
+ * without it silently downgrades to plaintext; asking for it here means it cannot.
+ * Local Postgres is exempted because it usually has no certificate at all.
+ */
+const localPostgres = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(postgresUrl ?? '');
+
 const pg = usingPostgres
   ? globalThis.__minimarketPg ??
     (globalThis.__minimarketPg = postgres(postgresUrl!, {
+      // Required by Supabase's transaction pooler on 6543: statements cannot be
+      // prepared when connections are handed between clients per transaction.
       prepare: false,
-      max: 6,
-      idle_timeout: 20,
-      connect_timeout: 15,
+      // One render of a group page fans out more than six queries at once, so a
+      // smaller pool made requests queue behind themselves. The pooler is built
+      // for many short-lived clients.
+      max: 10,
+      // A serverless instance is frozen between invocations and cannot fire its own
+      // timers, so a short idle window mostly guaranteed that the next request paid
+      // for a fresh TCP + TLS + SCRAM handshake. Keeping connections longer means
+      // a warm instance reuses one.
+      idle_timeout: 120,
+      // Short enough that pool exhaustion shows up as a connect timeout in the logs
+      // rather than silently consuming the whole function budget.
+      connect_timeout: 5,
+      // Nothing in the schema uses an array or custom type, so the catalogue query
+      // postgres.js runs on every new connection buys nothing and costs a round trip
+      // ahead of the query that is actually waiting.
+      fetch_types: false,
+      ...(localPostgres ? {} : { ssl: 'require' as const }),
     }))
   : undefined;
 
@@ -501,27 +548,48 @@ const BOOTSTRAP_LOCK = 4_021_968_517;
  * transactionally, so a failure part-way leaves nothing half-built.
  */
 async function bootstrapPostgres(): Promise<void> {
+  // One ALTER TABLE per column meant ~34 serialized round trips on every cold
+  // start, and because `ADD COLUMN IF NOT EXISTS` takes ACCESS EXCLUSIVE *before*
+  // it discovers the column already exists, each one briefly locked a table that
+  // warm instances were trying to read. Grouped by table it is four statements and
+  // four short lock windows. The clauses are identical, so the outcome is not.
+  const additionsByTable = new Map<string, string[]>();
+  for (const [table, column, ddl] of ADDITIONS) {
+    const postgresDdl = ddl
+      .replace(/\bREAL\b/g, 'DOUBLE PRECISION')
+      .replace(/datetime\('now'\)/g, pgNow);
+    const clauses = additionsByTable.get(table) ?? [];
+    clauses.push(`ADD COLUMN IF NOT EXISTS ${column} ${postgresDdl}`);
+    additionsByTable.set(table, clauses);
+  }
+
   await pg!.begin(async (sql) => {
+    // Before the advisory lock, so a queued DDL request cannot park every later
+    // read of groups/markets behind it indefinitely. A cold start that cannot get
+    // the lock in time fails loudly and retries, rather than hanging the request.
+    await sql.unsafe("SET LOCAL lock_timeout = '3s'");
     await sql.unsafe('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK]);
     await sql.unsafe(postgresSchema());
-    for (const [table, column, ddl] of ADDITIONS) {
-      const postgresDdl = ddl
-        .replace(/\bREAL\b/g, 'DOUBLE PRECISION')
-        .replace(/datetime\('now'\)/g, pgNow);
-      await sql.unsafe(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${postgresDdl}`);
+    for (const [table, clauses] of additionsByTable) {
+      await sql.unsafe(`ALTER TABLE ${table} ${clauses.join(', ')}`);
     }
-    await sql.unsafe('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL');
-    await sql.unsafe('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google ON users(google_sub) WHERE google_sub IS NOT NULL');
-    await sql.unsafe("UPDATE groups SET season_started_at = created_at WHERE season_started_at = ''");
+    // None of the rest takes a parameter, so they go out as one simple-protocol
+    // batch — one round trip instead of seven. Order still matters and is preserved:
+    // the season backfill has to see the season_started_at repair above it.
     await sql.unsafe(
-      `INSERT INTO membership_grants (user_id, group_id, season_number, granted_at)
-       SELECT ms.user_id, ms.group_id, g.current_season, ms.joined_at
-         FROM memberships ms JOIN groups g ON g.id = ms.group_id
-       ON CONFLICT DO NOTHING`,
+      [
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL',
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google ON users(google_sub) WHERE google_sub IS NOT NULL',
+        "UPDATE groups SET season_started_at = created_at WHERE season_started_at = ''",
+        `INSERT INTO membership_grants (user_id, group_id, season_number, granted_at)
+         SELECT ms.user_id, ms.group_id, g.current_season, ms.joined_at
+           FROM memberships ms JOIN groups g ON g.id = ms.group_id
+         ON CONFLICT DO NOTHING`,
+        `INSERT INTO seasons ${SEASON_BACKFILL} ON CONFLICT DO NOTHING`,
+        `INSERT INTO group_prizes ${PRIZE_BACKFILL} ON CONFLICT DO NOTHING`,
+        GRANDFATHER.replace(/datetime\('now'\)/g, pgNow),
+      ].join(';\n') + ';',
     );
-    await sql.unsafe(`INSERT INTO seasons ${SEASON_BACKFILL} ON CONFLICT DO NOTHING`);
-    await sql.unsafe(`INSERT INTO group_prizes ${PRIZE_BACKFILL} ON CONFLICT DO NOTHING`);
-    await sql.unsafe(GRANDFATHER.replace(/datetime\('now'\)/g, pgNow));
   });
 }
 
@@ -556,6 +624,21 @@ export const queryStats = {
 const tally = () => { if (counting) queries++; };
 
 /**
+ * Artificial per-query latency, for measuring critical-path *depth*.
+ *
+ * Local SQLite answers in microseconds, which hides the only thing that matters in
+ * production: how many round trips a screen has to make *in sequence*. A page doing
+ * 30 queries in one wave is fast; one doing 12 in a chain of 12 is not, and both
+ * look identical in a query count. Set DB_LATENCY_MS and divide the wall time by it
+ * to read depth directly — see scripts/profile.ts.
+ *
+ * Never set in production; unset, this is one comparison against 0.
+ */
+const injectedLatency = Number(process.env.DB_LATENCY_MS ?? 0);
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+const stall = () => (injectedLatency > 0 ? sleep(injectedLatency) : undefined);
+
+/**
  * node:sqlite hands back rows with a null prototype. React refuses to
  * serialize those across the server/client boundary, so every row is copied
  * into a plain object on the way out.
@@ -575,10 +658,39 @@ function postgresSql(input: string, mode: 'read' | 'run'): string {
   return sql;
 }
 
+/**
+ * Failures that mean "the socket was already dead", not "the query was wrong".
+ *
+ * A serverless instance is frozen between invocations, so it cannot fire its own
+ * keepalive or idle timers: the pooler hangs up, and the next request writes a
+ * query into a socket nobody is listening to. postgres.js rejects that in-flight
+ * query and reconnects underneath — but it never replays what was lost, so the
+ * request dies. One retry on a fresh connection turns that into a slow page
+ * instead of an error page.
+ */
+const TRANSIENT = new Set([
+  'CONNECTION_CLOSED',
+  'CONNECTION_ENDED',
+  'CONNECTION_DESTROYED',
+  'CONNECT_TIMEOUT',
+  'ECONNRESET',
+  '57P01', // admin_shutdown
+]);
+
 async function pgQuery<T = Row>(sql: string, params: unknown[], mode: 'read' | 'run') {
   await ensurePostgres();
   const client = pgTransaction.getStore() ?? pg!;
-  return await client.unsafe(postgresSql(sql, mode), params as never[]) as unknown as T[] & { count: number };
+  const text = postgresSql(sql, mode);
+  try {
+    return await client.unsafe(text, params as never[]) as unknown as T[] & { count: number };
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    // Reads only, and never inside a transaction: a Postgres transaction is
+    // already aborted by the time we see the error, and replaying a write is not
+    // safe when the first attempt may have committed.
+    if (mode !== 'read' || pgTransaction.getStore() || !code || !TRANSIENT.has(code)) throw error;
+    return await client.unsafe(text, params as never[]) as unknown as T[] & { count: number };
+  }
 }
 
 /** Every entry point checks this, so a misconfigured deployment says so once, clearly. */
@@ -589,6 +701,7 @@ function requireDatabase() {
 export async function all<T = Row>(sql: string, ...params: unknown[]): Promise<T[]> {
   requireDatabase();
   tally();
+  await stall();
   if (pg) return Array.from(await pgQuery<T>(sql, params, 'read'), plain);
   return (db.prepare(sql).all(...(params as never[])) as T[]).map(plain);
 }
@@ -596,6 +709,7 @@ export async function all<T = Row>(sql: string, ...params: unknown[]): Promise<T
 export async function get<T = Row>(sql: string, ...params: unknown[]): Promise<T | undefined> {
   requireDatabase();
   tally();
+  await stall();
   if (pg) {
     const rows = await pgQuery<T>(sql, params, 'read');
     return rows.length ? plain(rows[0]) : undefined;
@@ -607,6 +721,7 @@ export async function get<T = Row>(sql: string, ...params: unknown[]): Promise<T
 export async function run(sql: string, ...params: unknown[]): Promise<{ lastInsertRowid: number; changes: number }> {
   requireDatabase();
   tally();
+  await stall();
   if (pg) {
     const rows = await pgQuery<{ id?: number }>(sql, params, 'run');
     return { lastInsertRowid: Number(rows[0]?.id ?? 0), changes: rows.count };
@@ -615,6 +730,17 @@ export async function run(sql: string, ...params: unknown[]): Promise<{ lastInse
   return { lastInsertRowid: Number(result.lastInsertRowid), changes: Number(result.changes) };
 }
 
+/**
+ * SQLite has one process-global handle, so overlapping `tx()` calls would issue a
+ * second BEGIN on a connection that is already in a transaction — which throws
+ * `cannot start a transaction within a transaction`. Postgres has no such problem
+ * (`pg.begin()` takes its own pooled connection), so this queue exists only for
+ * local development, scripts and the tests. `depth` keeps genuine nesting joining
+ * the open transaction rather than queueing behind itself and deadlocking.
+ */
+let sqliteQueue: Promise<unknown> = Promise.resolve();
+let sqliteDepth = 0;
+
 /** Runs `fn` inside a transaction, rolling back on throw. */
 export async function tx<T>(fn: () => Promise<T>): Promise<T> {
   requireDatabase();
@@ -622,13 +748,24 @@ export async function tx<T>(fn: () => Promise<T>): Promise<T> {
     await ensurePostgres();
     return await pg.begin((transaction) => pgTransaction.run(transaction as unknown as Queryable, fn)) as unknown as T;
   }
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const out = await fn();
-    db.exec('COMMIT');
-    return out;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+  if (sqliteDepth > 0) return await fn();
+
+  const task = sqliteQueue.then(async () => {
+    sqliteDepth++;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const out = await fn();
+      db.exec('COMMIT');
+      return out;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    } finally {
+      sqliteDepth--;
+    }
+  });
+  // The chain must not inherit this task's rejection, or one failed transaction
+  // would reject every transaction queued behind it.
+  sqliteQueue = task.catch(() => {});
+  return await task as T;
 }

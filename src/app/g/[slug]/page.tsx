@@ -4,7 +4,7 @@ import { CATEGORIES, events, groupPrizes, marketsByGroup, membershipRequests, st
 import { sparkSeriesFor } from '@/lib/history';
 import { money0, relative, signedMoney } from '@/lib/format';
 import { MarketCard } from '@/components/MarketCard';
-import { Avatar } from '@/components/ui';
+import { Avatar } from '@/components/Avatar';
 
 /**
  * Where you stand, then what there is to bet on. Everything else — the full
@@ -22,16 +22,26 @@ export default async function HomePage({
   const { user, group, ms, isAdmin, base } = await groupContext(slug);
 
   const statuses = show === 'resolved' ? ['resolved'] : ['open', 'closed', 'resolving'];
-  const [all, rows, prizes, feed] = await Promise.all([
-    marketsByGroup(group.id, statuses),
+
+  // One wave. The sparklines are the only thing here that needs the market list
+  // first, so they are chained onto it rather than awaited after everything else —
+  // the standings, which are the slowest branch, run alongside instead of before.
+  // Filtering by category is pure in-memory work on rows we already have.
+  const marketsPromise = marketsByGroup(group.id, statuses);
+  const visiblePromise = marketsPromise.then((rows) =>
+    cat === 'All' ? rows : rows.filter((m) => m.category === cat),
+  );
+
+  const [all, markets, series, rows, prizes, feed, joinRequests] = await Promise.all([
+    marketsPromise,
+    visiblePromise,
+    visiblePromise.then(sparkSeriesFor),
     standings(group.id, group.starting_balance),
     groupPrizes(group.id),
     events(group.id, 5),
+    isAdmin ? membershipRequests(group.id) : Promise.resolve([]),
   ]);
-  const joinRequests = isAdmin ? await membershipRequests(group.id) : [];
 
-  const markets = cat === 'All' ? all : all.filter((m) => m.category === cat);
-  const series = await sparkSeriesFor(markets);
   const catList = ['All', ...CATEGORIES.filter((c) => all.some((m) => m.category === c))];
 
   const rank = rows.findIndex((r) => r.userId === user.id) + 1;

@@ -2,7 +2,8 @@
 
 import { useActionState, useRef, useState } from 'react';
 import { updateProfileAction, type FormState } from '@/app/actions';
-import { Avatar, SubmitButton, Toast } from './ui';
+import { Avatar } from './Avatar';
+import { SubmitButton, Toast } from './ui';
 
 /** Square edge of the stored image. Enough for a 96px avatar on a retina screen. */
 const SIZE = 256;

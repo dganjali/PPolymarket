@@ -23,42 +23,52 @@ export function UpgradeForm({
   const [cadence, setCadence] = useState<Cadence>('annual');
   const details = PLANS[plan];
   const on = current === plan;
-  const options: { id: Cadence; label: string; note?: string }[] = [
-    { id: 'annual', label: 'Yearly', note: annualSaving(details) > 0 ? `−${annualSaving(details)}%` : undefined },
-    { id: 'season', label: 'One season' },
-    { id: 'monthly', label: 'Monthly' },
-  ];
+  // Only the periods this plan is actually sold in. A tier with no season pass
+  // used to keep the tab and quote it at "$0 for the season", which reads as a
+  // pricing bug on a screen whose entire job is being believable about money.
+  const options = (
+    [
+      { id: 'annual', label: 'Yearly', note: annualSaving(details) > 0 ? `−${annualSaving(details)}%` : undefined },
+      { id: 'season', label: 'One season' },
+      { id: 'monthly', label: 'Monthly' },
+    ] as { id: Cadence; label: string; note?: string }[]
+  ).filter((option) => centsFor(details, option.id) > 0);
+
+  // A cadence this plan does not sell can still arrive from a stale click.
+  const period = options.some((option) => option.id === cadence) ? cadence : options[0]?.id ?? 'annual';
 
   return (
     <form action={formAction} className="plan-buy">
       <input type="hidden" name="slug" value={slug} />
       <input type="hidden" name="plan" value={plan} />
-      <input type="hidden" name="cadence" value={cadence} />
+      <input type="hidden" name="cadence" value={period} />
 
-      <div className="plan-cadence" role="group" aria-label="Billing period">
-        {options.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            className="plan-cadence-btn pressable"
-            data-on={cadence === option.id}
-            onClick={() => setCadence(option.id)}
-          >
-            {option.label}
-            {option.note && <span className="plan-save">{option.note}</span>}
-          </button>
-        ))}
-      </div>
+      {options.length > 1 && (
+        <div className="plan-cadence" role="group" aria-label="Billing period">
+          {options.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className="plan-cadence-btn pressable"
+              data-on={period === option.id}
+              onClick={() => setCadence(option.id)}
+            >
+              {option.label}
+              {option.note && <span className="plan-save">{option.note}</span>}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* The figure stays monospaced; the period does not, because "a season"
           set in mono at 28px reads as though it has double spaces in it. */}
       <div className="plan-price">
-        <span className="mono">${(centsFor(details, cadence) / 100).toLocaleString('en-US')}</span>
+        <span className="mono">${(centsFor(details, period) / 100).toLocaleString('en-US')}</span>
         <span className="plan-period">
-          {cadence === 'annual' ? 'per year' : cadence === 'season' ? 'for the season' : 'per month'}
+          {period === 'annual' ? 'per year' : period === 'season' ? 'for the season' : 'per month'}
         </span>
       </div>
-      {cadence === 'season' && (
+      {period === 'season' && (
         <p className="plan-note">
           A one-off payment covering one season — about four months. It does not renew, so there is
           nothing to remember to cancel over the summer.

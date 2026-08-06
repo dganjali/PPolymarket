@@ -102,6 +102,40 @@ export function NewGroupForm() {
         />
       </div>
 
+      <div className="field">
+        <label>Who can open a market</label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, fontWeight: 400 }}>
+          <input
+            type="checkbox"
+            name="requireApproval"
+            style={{ width: 18, height: 18, accentColor: 'var(--gold)', flex: 'none' }}
+          />
+          Hold members&rsquo; questions for my approval first
+        </label>
+        <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.55 }}>
+          Off by default: anyone in the group can put a question up and it goes live. Turn it on if you
+          would rather see each one first — either way you can change it in the group&rsquo;s settings.
+        </div>
+      </div>
+
+      <div className="field">
+        <label>New members</label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, fontWeight: 400 }}>
+          <input
+            type="checkbox"
+            name="requireMemberApproval"
+            defaultChecked={isPublic}
+            key={isPublic ? 'public' : 'private'}
+            style={{ width: 18, height: 18, accentColor: 'var(--gold)', flex: 'none' }}
+          />
+          Approve people before issuing a bankroll
+        </label>
+        <div className="mono" style={{ fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.55 }}>
+          Anyone holding an invite link is admitted straight away regardless — this screens the people
+          who find the group on their own.
+        </div>
+      </div>
+
       <div className="notice">
         No real money moves through Minimarket. Balances are points; the prize and the punishment are
         whatever your group agrees to and settles in person.

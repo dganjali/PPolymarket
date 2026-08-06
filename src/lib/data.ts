@@ -70,6 +70,8 @@ export interface MarketRow {
   open_price: number;
   lmsr_b: number;
   created_at: string;
+  /** Set the first time the wording, rules or deadline were corrected. */
+  edited_at: string | null;
   resolved_at: string | null;
 }
 
@@ -476,10 +478,15 @@ export async function openLegs(userId: number, groupId: number): Promise<OpenPos
  */
 export async function memberWorth(
   userId: number,
-  groupId: number,
+  group: Pick<GroupRow, 'id' | 'current_season'>,
+  balance: number,
 ): Promise<{ cash: number; invested: number; total: number }> {
-  const [cash, binary, categorical] = await Promise.all([
-    get<{ balance: number }>('SELECT balance FROM memberships WHERE user_id = ? AND group_id = ?', userId, groupId),
+  const groupId = group.id;
+  // All three are independent, so they go out together. The two lookups this used
+  // to make first — the caller's balance and the group's current season — are both
+  // already on rows the caller is holding, and each one cost a round trip that the
+  // rest of the function had to wait behind.
+  const [binary, categorical, optionsFor] = await Promise.all([
     all<{ yes_shares: number; no_shares: number; yes_reserve: number; no_reserve: number }>(
       `SELECT p.yes_shares, p.no_shares, m.yes_reserve, m.no_reserve
          FROM positions p JOIN markets m ON m.id = p.market_id JOIN groups g ON g.id = m.group_id
@@ -501,6 +508,7 @@ export async function memberWorth(
       userId,
       groupId,
     ),
+    optionsByMarket(groupId, group.current_season),
   ]);
 
   let invested = 0;
@@ -509,18 +517,12 @@ export async function memberWorth(
     invested += exitValue(pool, 'YES', row.yes_shares) + exitValue(pool, 'NO', row.no_shares);
   }
 
-  if (categorical.length) {
-    const season = (await get<{ current_season: number }>('SELECT current_season FROM groups WHERE id = ?', groupId))
-      ?.current_season ?? 1;
-    const optionsFor = await optionsByMarket(groupId, season);
-    for (const row of categorical) {
-      const options = optionsFor.get(row.market_id);
-      if (!options) continue;
-      invested += categoricalExitValueFrom(row.lmsr_b, options, row.option_id, row.shares);
-    }
+  for (const row of categorical) {
+    const options = optionsFor.get(row.market_id);
+    if (!options) continue;
+    invested += categoricalExitValueFrom(row.lmsr_b, options, row.option_id, row.shares);
   }
 
-  const balance = cash?.balance ?? 0;
   return { cash: balance, invested, total: balance + invested };
 }
 
@@ -540,31 +542,41 @@ export interface Standing {
 
 /** Portfolio value for every member: cash plus mark-to-market on open legs. */
 export async function standings(groupId: number, startingBalance: number): Promise<Standing[]> {
-  const season = (await get<{ current_season: number }>('SELECT current_season FROM groups WHERE id = ?', groupId))
-    ?.current_season ?? 1;
-  const members = await all<{ user_id: number; name: string; handle: string; role: string; balance: number; avatar: string | null }>(
-    `SELECT ms.user_id, ms.role, ms.balance, u.name, u.handle, u.avatar
-       FROM memberships ms JOIN users u ON u.id = ms.user_id
-      WHERE ms.group_id = ?`,
-    groupId,
-  );
-
-  const live = await all<PositionRow & { yes_reserve: number; no_reserve: number }>(
-    `SELECT p.*, m.yes_reserve, m.no_reserve FROM positions p JOIN markets m ON m.id = p.market_id
-       JOIN groups g ON g.id = m.group_id
-      WHERE m.group_id = ? AND m.season_number = g.current_season AND m.status IN ('open','closed','resolving')`,
-    groupId,
-  );
+  // These four are independent — each scopes itself to the current season with its
+  // own `m.season_number = g.current_season` predicate, evaluated server-side — so
+  // they go out in one wave. Run in sequence, as they were, this function was six
+  // round trips deep and the slowest branch of every screen that renders a table.
+  const [members, live, tradeRows, categoricalLive] = await Promise.all([
+    all<{ user_id: number; name: string; handle: string; role: string; balance: number; avatar: string | null }>(
+      `SELECT ms.user_id, ms.role, ms.balance, u.name, u.handle, u.avatar
+         FROM memberships ms JOIN users u ON u.id = ms.user_id
+        WHERE ms.group_id = ?`,
+      groupId,
+    ),
+    all<PositionRow & { yes_reserve: number; no_reserve: number }>(
+      `SELECT p.*, m.yes_reserve, m.no_reserve FROM positions p JOIN markets m ON m.id = p.market_id
+         JOIN groups g ON g.id = m.group_id
+        WHERE m.group_id = ? AND m.season_number = g.current_season AND m.status IN ('open','closed','resolving')`,
+      groupId,
+    ),
+    all<{ user_id: number; n: number }>(
+      `SELECT t.user_id, CAST(COUNT(*) AS INTEGER) AS n FROM trades t JOIN markets m ON m.id = t.market_id
+         JOIN groups g ON g.id = m.group_id
+        WHERE m.group_id = ? AND m.season_number = g.current_season GROUP BY t.user_id`,
+      groupId,
+    ),
+    all<{ user_id: number; market_id: number; option_id: number; shares: number; lmsr_b: number; season_number: number }>(
+      `SELECT op.user_id, op.market_id, op.option_id, op.shares, m.lmsr_b, m.season_number
+         FROM option_positions op JOIN markets m ON m.id = op.market_id
+         JOIN groups g ON g.id = m.group_id
+        WHERE m.group_id = ? AND m.season_number = g.current_season
+          AND op.shares > 0.0001 AND m.status IN ('open','closed','resolving')`,
+      groupId,
+    ),
+  ]);
 
   const tradeCounts = new Map<number, number>();
-  for (const t of await all<{ user_id: number; n: number }>(
-    `SELECT t.user_id, CAST(COUNT(*) AS INTEGER) AS n FROM trades t JOIN markets m ON m.id = t.market_id
-       JOIN groups g ON g.id = m.group_id
-      WHERE m.group_id = ? AND m.season_number = g.current_season GROUP BY t.user_id`,
-    groupId,
-  )) {
-    tradeCounts.set(t.user_id, t.n);
-  }
+  for (const t of tradeRows) tradeCounts.set(t.user_id, t.n);
 
   const invested = new Map<number, number>();
   const openCount = new Map<number, number>();
@@ -576,17 +588,12 @@ export async function standings(groupId: number, startingBalance: number): Promi
     openCount.set(p.user_id, (openCount.get(p.user_id) ?? 0) + 1);
   }
 
-  const categoricalLive = await all<{ user_id: number; market_id: number; option_id: number; shares: number; lmsr_b: number }>(
-    `SELECT op.user_id, op.market_id, op.option_id, op.shares, m.lmsr_b
-       FROM option_positions op JOIN markets m ON m.id = op.market_id
-       JOIN groups g ON g.id = m.group_id
-      WHERE m.group_id = ? AND m.season_number = g.current_season
-        AND m.status IN ('open','closed','resolving') AND op.shares > 0.0001`,
-    groupId,
-  );
-  // One query for every option in the group, then pure maths per position.
+  // One query for every option in the group, then pure maths per position. The
+  // season comes off the rows being valued rather than from a separate lookup, so
+  // the options can never be read for a different season than the positions were —
+  // which a rollover landing mid-request would otherwise cause.
   const optionsFor = categoricalLive.length
-    ? await optionsByMarket(groupId, season)
+    ? await optionsByMarket(groupId, categoricalLive[0].season_number)
     : new Map<number, MarketOptionRow[]>();
   for (const position of categoricalLive) {
     const options = optionsFor.get(position.market_id);
@@ -781,6 +788,14 @@ export async function membershipRequests(groupId: number): Promise<MembershipReq
        JOIN users u ON u.id = r.user_id WHERE r.group_id = ? ORDER BY r.id`,
     groupId,
   );
+}
+
+/** Just the badge number, for the shell — the full rows are a page's worth of joins. */
+export async function membershipRequestCount(groupId: number): Promise<number> {
+  return (await get<{ n: number }>(
+    'SELECT CAST(COUNT(*) AS INTEGER) AS n FROM membership_requests WHERE group_id = ?',
+    groupId,
+  ))!.n;
 }
 
 export interface DisputeRow {

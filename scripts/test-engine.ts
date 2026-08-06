@@ -49,6 +49,7 @@ const {
   sweepResolutions,
   transferOwnership,
   updateGroup,
+  updateMarket,
 } = await import('../src/lib/engine');
 const {
   groupPrizes,
@@ -237,6 +238,8 @@ try {
     prize: 'bragging rights',
     punishment: 'dishes',
     requireMemberApproval: false,
+    // Not the default any more, and the proposal flow below is what tests it.
+    requireApproval: true,
   });
   await joinGroup(a.id, group.invite_code);
   await joinGroup(b.id, group.invite_code);
@@ -409,6 +412,101 @@ try {
   });
   await approveMarket(admin.id, approved.id);
   ok((await marketById(approved.id))!.status === 'open', 'approval opens the market');
+
+  // ── the default: no queue at all ───────────────────────────────────────────
+  const relaxed = await createGroup(admin.id, {
+    name: 'Relaxed Group',
+    startingBalance: 1000,
+    seasonEnds: null,
+    prize: '',
+    punishment: '',
+    requireMemberApproval: false,
+  });
+  ok(!relaxed.require_approval, 'a new group does not hold member markets for approval');
+  await joinGroup(a.id, relaxed.invite_code);
+  const straightThrough = await createMarket(a.id, relaxed, {
+    question: 'Does a members market open on its own?',
+    category: 'Other',
+    rules: '',
+    closesAt: at(7),
+    openPrice: 0.5,
+    funding: 25,
+  });
+  ok(straightThrough.status === 'open', 'by default a member market opens immediately');
+
+  // ── editing a market after the fact ────────────────────────────────────────
+  await updateMarket(a.id, straightThrough.id, {
+    question: 'Does a member market open on its own?',
+    category: 'School',
+    rules: 'Resolves YES if it never queued.',
+    closesAt: at(10),
+  });
+  const edited = (await marketById(straightThrough.id))!;
+  ok(edited.question === 'Does a member market open on its own?', 'the author can fix their own wording');
+  ok(edited.category === 'School' && !!edited.edited_at, 'the edit is recorded');
+  ok(
+    (await all<{ body: string }>('SELECT body FROM events WHERE market_id = ?', straightThrough.id)).some((e) =>
+      e.body.startsWith('edited'),
+    ),
+    'an edit is written to the group log',
+  );
+
+  await joinGroup(b.id, relaxed.invite_code);
+  await throws(
+    () =>
+      updateMarket(b.id, straightThrough.id, {
+        question: 'Can a bystander rewrite the question?',
+        category: 'Other',
+        rules: '',
+        closesAt: at(10),
+      }),
+    'somebody else’s market cannot be edited by a member',
+  );
+
+  await buy(b.id, straightThrough.id, 'YES', 20);
+  await throws(
+    () =>
+      updateMarket(a.id, straightThrough.id, {
+        question: 'Can the author reword it once people are in?',
+        category: 'Other',
+        rules: '',
+        closesAt: at(10),
+      }),
+    'once somebody has traded, the author needs an admin',
+  );
+  await throws(
+    () =>
+      updateMarket(a.id, straightThrough.id, {
+        question: 'Does a market accept a closing date in the past?',
+        category: 'Other',
+        rules: '',
+        closesAt: at(-1),
+      }),
+    'an open market cannot be edited to close in the past',
+  );
+  await proposeResolution(admin.id, straightThrough.id, 'YES', 'It opened on its own.');
+  await throws(
+    () =>
+      updateMarket(admin.id, straightThrough.id, {
+        question: 'Can the question move while the result is being reviewed?',
+        category: 'Other',
+        rules: '',
+        closesAt: at(10),
+      }),
+    'wording is frozen while a result is under review',
+  );
+  await run('UPDATE markets SET dispute_ends_at = ? WHERE id = ?', at(-1), straightThrough.id);
+  await finalizeResolution(admin.id, straightThrough.id);
+  await throws(
+    () =>
+      updateMarket(admin.id, straightThrough.id, {
+        question: 'Can a settled market be reworded?',
+        category: 'Other',
+        rules: '',
+        closesAt: at(10),
+      }),
+    'a settled market cannot be edited',
+  );
 
   // ── trading ────────────────────────────────────────────────────────────────
   const beforeBuy = await balance(a.id, group.id);
@@ -697,6 +795,108 @@ try {
   await finalizeResolution(b.id, contested.id);
   ok((await marketById(contested.id))!.status === 'resolved', 'an uninvolved admin can settle a disputed market');
   await setMemberRole(admin.id, group.id, b.id, 'member');
+
+  // ── concurrent sweeps must not settle a market twice ───────────────────────
+  //
+  // The group layout used to sweep inline on every render, and Next prefetches
+  // links — so hovering a group and then clicking it ran two sweeps at once. Both
+  // read the same 'resolving' market, both passed the status check on their own
+  // stale copy, and both paid every holder. The fix is a conditional UPDATE that
+  // claims the market first; these assert the loser pays nobody.
+  {
+    const race = await createMarket(admin.id, group, {
+      question: 'Do two concurrent sweeps pay out once?',
+      category: 'Other',
+      rules: '',
+      closesAt: at(7),
+      openPrice: 0.5,
+      funding: 25,
+    });
+    await buy(a.id, race.id, 'YES', 100);
+    await proposeResolution(admin.id, race.id, 'YES', 'It resolved yes.');
+    await run('UPDATE markets SET dispute_ends_at = ? WHERE id = ?', at(-1), race.id);
+
+    const before = await balance(a.id, group.id);
+    const results = await Promise.allSettled([sweepResolutions(group.id), sweepResolutions(group.id)]);
+    ok(
+      results.every((r) => r.status === 'fulfilled'),
+      'two concurrent sweeps both resolve without throwing',
+    );
+
+    const settled = (await marketById(race.id))!;
+    ok(settled.status === 'resolved', 'the racing market ends up resolved');
+    close(settled.collateral, 0, 'a settled market releases all collateral');
+
+    const events = await all<{ n: number }>(
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM events WHERE market_id = ? AND kind = 'resolve'",
+      race.id,
+    );
+    ok(events[0].n === 1, 'settling twice logs exactly one resolve event');
+
+    const paid = (await balance(a.id, group.id)) - before;
+    const position = (await get<{ yes_shares: number }>(
+      'SELECT yes_shares FROM positions WHERE market_id = ? AND user_id = ?',
+      race.id,
+      a.id,
+    ))!;
+    close(paid, position.yes_shares, 'the winner is paid exactly once, $1 per share');
+  }
+
+  // The same race on the categorical path, which took its own route to settlement
+  // and so had to be fixed separately.
+  {
+    const race = await createMarket(admin.id, group, {
+      question: 'Which way does the categorical race go?',
+      category: 'Other',
+      rules: '',
+      closesAt: at(7),
+      openPrice: 0.5,
+      funding: 30,
+      marketType: 'categorical',
+      options: ['This one', 'That one', 'The other'],
+    });
+    await buyCategorical(a.id, race.id, (await marketOptions(race.id))[0].id, 60);
+    const winner = (await marketOptions(race.id))[0];
+    await proposeResolution(admin.id, race.id, String(winner.id), 'This one happened.');
+    await run('UPDATE markets SET dispute_ends_at = ? WHERE id = ?', at(-1), race.id);
+
+    const before = await balance(a.id, group.id);
+    const results = await Promise.allSettled([sweepResolutions(group.id), sweepResolutions(group.id)]);
+    ok(results.every((r) => r.status === 'fulfilled'), 'concurrent categorical sweeps do not throw');
+
+    const settled = (await marketById(race.id))!;
+    ok(settled.status === 'resolved', 'the racing categorical market ends up resolved');
+    close(settled.collateral, 0, 'a settled categorical market releases all collateral');
+
+    const events = await all<{ n: number }>(
+      "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM events WHERE market_id = ? AND kind = 'resolve'",
+      race.id,
+    );
+    ok(events[0].n === 1, 'settling a categorical market twice logs one resolve event');
+
+    const held = (await get<{ shares: number }>(
+      'SELECT shares FROM option_positions WHERE option_id = ? AND user_id = ?',
+      winner.id,
+      a.id,
+    ))!;
+    close((await balance(a.id, group.id)) - before, held.shares, 'the categorical winner is paid once');
+  }
+
+  // A market past its deadline cannot be traded, even before a sweep has run —
+  // which matters now that sweeps happen after the response rather than during it.
+  {
+    const expired = await createMarket(admin.id, group, {
+      question: 'Can you bet after the whistle?',
+      category: 'Other',
+      rules: '',
+      closesAt: at(7),
+      openPrice: 0.5,
+      funding: 25,
+    });
+    await run('UPDATE markets SET closes_at = ? WHERE id = ?', at(-1), expired.id);
+    await throws(() => buy(a.id, expired.id, 'YES', 10), 'a market past its close time rejects a buy');
+    await throws(() => sell(a.id, expired.id, 'YES', 1), 'a market past its close time rejects a sell');
+  }
 
   console.log(`✓ ${checks} assertions passed`);
 } finally {

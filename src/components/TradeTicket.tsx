@@ -52,7 +52,10 @@ export function TradeTicket({
   balance,
   tradable,
   closedReason,
-  initialKey,
+  activeKey,
+  onPick,
+  open,
+  onOpenChange,
 }: {
   slug: string;
   marketId: number;
@@ -64,15 +67,18 @@ export function TradeTicket({
   tradable: boolean;
   /** Why trading is off, when it is. */
   closedReason?: string;
-  initialKey?: string;
+  /** Which leg is being traded. Owned by the page, so the outcome list agrees. */
+  activeKey: string;
+  onPick: (key: string) => void;
+  /** Whether the phone sheet is up. Ignored on a desktop, where the rail is always open. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
   const [state, formAction] = useActionState(tradeAction, {} as FormState);
-  const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<Mode>('BUY');
   const [amount, setAmount] = useState('');
   const [qty, setQty] = useState('');
   const [picking, setPicking] = useState(false);
-  const [activeKey, setActiveKey] = useState(initialKey ?? legs[0]?.key ?? 'YES');
 
   const index = Math.max(0, legs.findIndex((leg) => leg.key === activeKey));
   const leg = legs[index] ?? legs[0];
@@ -82,9 +88,12 @@ export function TradeTicket({
     if (state.ok) {
       setAmount('');
       setQty('');
-      setOpen(false);
+      onOpenChange(false);
       setPicking(false);
     }
+    // `onOpenChange` is stable enough in practice, and depending on it would
+    // re-run this on every parent render and close the sheet mid-typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
   const prices = useMemo(
@@ -151,9 +160,9 @@ export function TradeTicket({
               key={option.key}
               className={`side-btn pressable ${book.kind === 'binary' ? (i === 0 ? 'pill-yes' : 'pill-no') : 'pill-yes'}`}
               onClick={() => {
-                setActiveKey(option.key);
+                onPick(option.key);
                 setMode('BUY');
-                setOpen(true);
+                onOpenChange(true);
               }}
             >
               <div className="tt-trigger-label">{book.kind === 'binary' ? `Buy ${option.label}` : option.label}</div>
@@ -163,7 +172,7 @@ export function TradeTicket({
         </div>
       )}
 
-      <div className="sheet" data-open={open} onClick={(e) => e.target === e.currentTarget && setOpen(false)}>
+      <div className="sheet" data-open={open} onClick={(e) => e.target === e.currentTarget && onOpenChange(false)}>
         <form action={formAction} className="sheet-body tt">
           <input type="hidden" name="slug" value={slug} />
           <input type="hidden" name="marketId" value={marketId} />
@@ -185,7 +194,7 @@ export function TradeTicket({
             <button
               type="button"
               className="tt-close mobile-only pressable"
-              onClick={() => setOpen(false)}
+              onClick={() => onOpenChange(false)}
               aria-label="Close"
             >
               ✕
@@ -237,7 +246,7 @@ export function TradeTicket({
                   className="tt-side pressable"
                   data-side={i === 0 ? 'yes' : 'no'}
                   data-on={activeKey === option.key}
-                  onClick={() => setActiveKey(option.key)}
+                  onClick={() => onPick(option.key)}
                 >
                   {option.label} <b className="mono">{centsLabel(prices[i])}</b>
                 </button>
@@ -265,7 +274,7 @@ export function TradeTicket({
                       className="tt-option pressable"
                       data-on={option.key === activeKey}
                       onClick={() => {
-                        setActiveKey(option.key);
+                        onPick(option.key);
                         setPicking(false);
                       }}
                     >

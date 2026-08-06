@@ -10,6 +10,7 @@ import {
   memberRoleAction,
   regenerateInviteAction,
   revokeInviteAction,
+  setMarketApprovalAction,
   startNextSeasonAction,
   transferOwnershipAction,
   updatePrizesAction,
@@ -131,6 +132,35 @@ export function StakesEditor({ slug, punishment }: { slug: string; punishment: s
       <SubmitButton className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} pendingLabel="Saving…">
         Save forfeit
       </SubmitButton>
+      <Toast message={state.ok} />
+    </form>
+  );
+}
+
+/**
+ * The approval switch, on the queue it governs.
+ *
+ * "Why do you have to approve every market" is a settings question that only
+ * ever occurs to somebody while they are clearing the queue, which is nowhere
+ * near the settings form. So the switch is here too, and says which way it is
+ * pointing rather than making you infer it from a checkbox.
+ */
+export function ApprovalToggle({ slug, requireApproval }: { slug: string; requireApproval: boolean }) {
+  const [state, formAction] = useActionState(setMarketApprovalAction, {} as FormState);
+
+  return (
+    <form action={formAction} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <input type="hidden" name="slug" value={slug} />
+      <input type="hidden" name="requireApproval" value={requireApproval ? '0' : '1'} />
+      <div className="mono" style={{ flex: 1, minWidth: 180, fontSize: 10, color: 'var(--dim-2)', lineHeight: 1.55 }}>
+        {requireApproval
+          ? 'Every market a member proposes waits here for you.'
+          : 'Members open markets without waiting for you. Nothing queues up.'}
+      </div>
+      <SubmitButton className="btn btn-ghost btn-sm" pendingLabel="Saving…">
+        {requireApproval ? 'Stop reviewing every market' : 'Review markets before they open'}
+      </SubmitButton>
+      {state.error && <div className="error">{state.error}</div>}
       <Toast message={state.ok} />
     </form>
   );

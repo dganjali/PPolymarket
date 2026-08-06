@@ -112,6 +112,12 @@ export async function GET() {
       ok: problems.length === 0 && database.ok === true,
       driver: configured.POSTGRES_URL || configured.DATABASE_URL ? 'postgres' : 'sqlite',
       environment: process.env.NODE_ENV ?? 'unknown',
+      // Every query is a round trip, so where this function runs relative to the
+      // database is a multiplier on every page in the app. `target.host` names the
+      // database's region (the aws-0-<region> segment); this names the function's.
+      // If they differ, moving one of them is the largest single win available and
+      // needs no code change.
+      region: process.env.VERCEL_REGION ?? 'local',
       configured,
       target,
       database,

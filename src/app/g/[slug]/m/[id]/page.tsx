@@ -6,6 +6,7 @@ import { groupContext } from '@/lib/context';
 import { colorFor, recentDelta, type Series } from '@/lib/chart';
 import { marketMoments, marketSeries, relatedMarkets } from '@/lib/history';
 import {
+  CATEGORIES,
   categoricalState,
   comments,
   disputeFor,
@@ -35,15 +36,25 @@ import {
 import { MarketTrading, MarketHeadline } from '@/components/MarketTrading';
 import type { TicketBook, TicketLeg } from '@/components/TradeTicket';
 import { MarketGlyph } from '@/components/MarketGlyph';
-import { Bookmark, Chevron, Code, Link as LinkIcon } from '@/components/Icon';
+import { CopyPageLink } from '@/components/CopyLink';
+import { Chevron } from '@/components/Icon';
 import { CommentBox } from '@/components/CommentBox';
+import { EditMarketForm } from '@/components/EditMarketForm';
 import { DisputeForm } from '@/components/DisputeForm';
 import { AdminMarketControls } from '@/components/AdminControls';
 import { ConflictNotice } from '@/components/ConflictNotice';
-import { Avatar } from '@/components/ui';
+import { Avatar } from '@/components/Avatar';
 
-export default async function MarketPage({ params }: { params: Promise<{ slug: string; id: string }> }) {
+export default async function MarketPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string; id: string }>;
+  /** `?side=` is how the Yes/No buttons on a market card carry their side over. */
+  searchParams: Promise<{ side?: string }>;
+}) {
   const { slug, id } = await params;
+  const { side } = await searchParams;
   const { user, group, ms, isAdmin, base } = await groupContext(slug);
 
   const market = await marketById(Number(id));
@@ -180,9 +191,7 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           <h1 className="mk-title">{market.question}</h1>
         </div>
         <div className="mk-tools">
-          <span className="mk-tool" aria-hidden><Code size={16} /></span>
-          <span className="mk-tool" aria-hidden><LinkIcon size={16} /></span>
-          <span className="mk-tool" aria-hidden><Bookmark size={16} /></span>
+          <CopyPageLink />
         </div>
       </header>
 
@@ -218,6 +227,7 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
         now={now}
         related={related}
         base={base}
+        initialKey={side}
       >
         {/* One element, not a list. These sections cross the server-to-client
             boundary as `children`, and an array that crosses it loses the marker
@@ -285,8 +295,39 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           <div className="mk-rules-meta mono">
             Opened by @{market.creator_handle} · {traderCount} trader{traderCount === 1 ? '' : 's'} ·{' '}
             {volLabel(market.volume)} traded · {money0(market.collateral)} pooled
+            {market.edited_at ? ` · edited ${relative(market.edited_at)}` : ''}
           </div>
+          {/* Where the creator's stake went, in the one place they look for it.
+              "Am I just down $100?" is the first question every market author
+              asks, and until now the app answered it nowhere. */}
+          <p className="mk-rules-body t-small">
+            @{market.creator_handle} put {money0(market.subsidy)} of their own cash in to open this, and the
+            group underwrote {money0(market.house)} alongside it — together that is the{' '}
+            {money0(market.subsidy + market.house)} the pool started with. That stake is not a fee: it is
+            lent to the market as liquidity. The 1.5% taken off every trade stays in the same pool, and
+            when the market settles, whatever is left after winning shares are paid out goes back to the
+            two of them in proportion — so the author gets their share back plus the fees, and takes a
+            loss only if the group read the outcome better than the odds they opened at.
+          </p>
         </section>
+
+        {(isAdmin || (market.creator_id === user.id && market.volume === 0)) &&
+          market.status !== 'resolved' &&
+          market.status !== 'rejected' &&
+          market.status !== 'resolving' && (
+            <EditMarketForm
+              key="edit"
+              slug={slug}
+              marketId={market.id}
+              question={market.question}
+              category={market.category}
+              rules={market.rules}
+              closesAt={market.closes_at}
+              categories={CATEGORIES}
+              traded={market.volume > 0}
+              editedAt={market.edited_at}
+            />
+          )}
 
         {!categorical && <DepthLadder key="ladder" market={market} />}
 

@@ -2,39 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useFormStatus } from 'react-dom';
-import { initials } from '@/lib/format';
 
-export function Avatar({
-  name,
-  src,
-  size = 32,
-  radius = 9,
-}: {
-  name: string;
-  /** A stored data URL, or null to fall back to initials. */
-  src?: string | null;
-  size?: number;
-  radius?: number;
-}) {
-  const box = { width: size, height: size, borderRadius: radius, flex: 'none' as const };
-  if (src) {
-    // eslint-disable-next-line @next/next/no-img-element -- a data URL has nothing for the image optimiser to fetch.
-    return (
-      <img
-        src={src}
-        alt={name}
-        width={size}
-        height={size}
-        style={{ ...box, objectFit: 'cover', display: 'block', background: 'var(--chip)' }}
-      />
-    );
-  }
-  return (
-    <div className="avatar" style={{ ...box, fontSize: Math.round(size * 0.34) }}>
-      {initials(name)}
-    </div>
-  );
-}
+// Avatar lives in ./Avatar so it can render on the server — it needs nothing from
+// the browser, and living in this module made every one of them a hydration root.
+// Import it from '@/components/Avatar'; re-exporting it here would pull it straight
+// back into the client graph, since everything a 'use client' module touches joins it.
 
 export function SubmitButton({
   children,

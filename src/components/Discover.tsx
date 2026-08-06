@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useActionState } from 'react';
 import { joinPublicGroupAction, type FormState } from '@/app/actions';
 import { money0 } from '@/lib/format';
-import { Avatar, SubmitButton } from './ui';
+import { Avatar } from './Avatar';
+import { SubmitButton } from './ui';
 
 export interface DirectoryGroup {
   id: number;

@@ -3,7 +3,8 @@
 import { useActionState, useEffect, useRef } from 'react';
 import { commentAction, type FormState } from '@/app/actions';
 import { relative } from '@/lib/format';
-import { Avatar, SubmitButton } from './ui';
+import { Avatar } from './Avatar';
+import { SubmitButton } from './ui';
 
 export interface Comment {
   id: number;

@@ -13,7 +13,8 @@
     "seed": "node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/seed.ts",
     "test": "node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/test-amm.ts && node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/test-chart.ts && node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/test-engine.ts",
     "typecheck": "tsc --noEmit",
-    "profile": "DEBUG_SQL=1 node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/profile.ts"
+    "profile": "DEBUG_SQL=1 node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/profile.ts",
+    "profile:page": "DEBUG_SQL=1 node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/profile-page.ts"
   },
   "dependencies": {
     "@vercel/speed-insights": "^2.0.0",

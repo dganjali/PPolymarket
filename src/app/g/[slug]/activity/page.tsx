@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { groupContext } from '@/lib/context';
 import { events } from '@/lib/data';
 import { relative } from '@/lib/format';
-import { Avatar } from '@/components/ui';
+import { Avatar } from '@/components/Avatar';
 
 const KIND_COLOR: Record<string, string> = {
   trade: 'var(--ink-3)',

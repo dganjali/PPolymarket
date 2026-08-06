@@ -133,7 +133,32 @@ export default async function BillingPage({
               </li>
             ))}
           </ul>
-          <UpgradeForm slug={slug} plan={target} current={current} simulated={billingIsSimulated} />
+          {/* An invoiced tier has no self-serve price to quote. Showing it the
+              same buy form did: it offered monthly and season tabs the tier does
+              not sell, quoted them at $0, and its one button only ever returned
+              "Campus is invoiced." */}
+          {PLANS[target].selfServe ? (
+            <UpgradeForm slug={slug} plan={target} current={current} simulated={billingIsSimulated} />
+          ) : (
+            <>
+              <div className="plan-price">
+                <span className="mono">${(PLANS[target].annualCents / 100).toLocaleString('en-US')}</span>
+                <span className="plan-period">per year, invoiced</span>
+              </div>
+              <p className="plan-note">
+                {PLANS[target].name} is billed once a year against an invoice or a purchase order, so it
+                is set up by hand rather than bought with a card.
+              </p>
+              <a
+                className="btn btn-primary pressable"
+                href={`mailto:sales@minimarket.app?subject=${encodeURIComponent(
+                  `${PLANS[target].name} for ${group.name}`,
+                )}`}
+              >
+                Email sales@minimarket.app
+              </a>
+            </>
+          )}
         </section>
       )}
 

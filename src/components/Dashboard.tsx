@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { money0, signedMoney } from '@/lib/format';
-import { Avatar } from './ui';
+import { Avatar } from './Avatar';
 
 export function StatTile({
   label,

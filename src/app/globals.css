@@ -205,9 +205,18 @@ textarea { resize: vertical; line-height: 1.45; }
 
 /* Entrance for a section. `.stagger > *` walks its children in behind it.
    Both run once on mount: they are animations, not transitions, so a re-render
-   with the same DOM never replays them. */
-.enter { animation: mm-rise var(--dur-slow) var(--ease-out) both; }
-.stagger > * { animation: mm-rise var(--dur-slow) var(--ease-out) both; }
+   with the same DOM never replays them.
+
+   `backwards`, never `both`. `both` leaves the final keyframe applied forever,
+   and that keyframe sets `transform` — which makes the element a containing
+   block for every `position: fixed` descendant, permanently. That is not
+   cosmetic: it moved the phone buy bar and every toast in the app out of the
+   viewport and hundreds of pixels down the page, so tapping Buy did nothing
+   visible and no form ever appeared to confirm it had saved. With `backwards`
+   the from-keyframe still applies before the animation starts (so nothing
+   flashes in un-animated), and the transform is gone the moment it ends. */
+.enter { animation: mm-rise var(--dur-slow) var(--ease-out) backwards; }
+.stagger > * { animation: mm-rise var(--dur-slow) var(--ease-out) backwards; }
 .stagger > *:nth-child(1) { animation-delay: 0ms }
 .stagger > *:nth-child(2) { animation-delay: 40ms }
 .stagger > *:nth-child(3) { animation-delay: 80ms }
@@ -374,6 +383,11 @@ textarea { resize: vertical; line-height: 1.45; }
 }
 
 .content { flex: 1; padding-bottom: calc(var(--nav-h) + 24px); }
+/* The shell wrapper fades rather than rises. It is the ancestor of the phone
+   buy bar, the trade sheet and every toast — all `position: fixed` — and an
+   element mid-transform is a containing block for those, so even the few
+   hundred milliseconds of a rise would drop them out of the viewport on load. */
+.content.enter { animation-name: mm-in; }
 
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;

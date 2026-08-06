@@ -370,35 +370,5 @@ function MomentCard({
 }
 
 /** The compact trend line on a market card. Same step semantics, no chrome. */
-export function Spark({
-  points,
-  color,
-  width = 72,
-  height = 26,
-}: {
-  points: { t: number; v: number }[];
-  color: string;
-  width?: number;
-  height?: number;
-}) {
-  if (points.length < 2) return <div style={{ width, height }} />;
-  const from = points[0].t;
-  const to = points[points.length - 1].t;
-  // A sparkline is about shape, so it fills its own band rather than sitting on
-  // an absolute 0-100 scale where most markets would be a flat line near zero.
-  const values = points.map((p) => p.v);
-  const lo = Math.min(...values);
-  const hi = Math.max(...values);
-  const span = Math.max(0.04, hi - lo);
-  const mid = (lo + hi) / 2;
-  const x = (t: number) => ((t - from) / Math.max(1, to - from)) * width;
-  const y = (v: number) => height - 2 - ((v - (mid - span / 2 - span * 0.15)) / (span * 1.3)) * (height - 4);
-
-  return (
-    <svg width={width} height={height} style={{ display: 'block', overflow: 'visible' }} aria-hidden>
-      <path d={stepPath(points, x, y)} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" />
-      <circle cx={x(to)} cy={y(points[points.length - 1].v)} r={2} fill={color} />
-    </svg>
-  );
-}
+// Spark moved to ./Spark — it is a static SVG and does not belong in a client module.
 
