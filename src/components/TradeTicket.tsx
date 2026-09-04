@@ -7,7 +7,7 @@ import { categoricalPrices, quoteCategoricalBuy, quoteCategoricalSell } from '@/
 import { centsLabel, money, pctLabel, shares as fmtShares, signedCents } from '@/lib/format';
 import { Confetti } from './Confetti';
 import { MarketGlyph } from './MarketGlyph';
-import { Chevron, Info } from './Icon';
+import { Chevron, Close, Info } from './Icon';
 import { SubmitButton, Toast } from './ui';
 
 /**
@@ -200,7 +200,7 @@ export function TradeTicket({
               onClick={() => onOpenChange(false)}
               aria-label="Close"
             >
-              ✕
+              <Close size={14} />
             </button>
           </header>
 

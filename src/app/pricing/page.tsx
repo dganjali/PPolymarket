@@ -10,7 +10,7 @@ export const metadata = {
 };
 
 /** The lines under each tier, in the order they sell. */
-const COMPARISON: { label: string; value: (plan: PlanId) => string }[] = [
+const COMPARISON: { label: string; value: (plan: PlanId) => React.ReactNode }[] = [
   { label: 'Members', value: (id) => count(PLANS[id].limits.members) },
   { label: 'Live markets at once', value: (id) => count(PLANS[id].limits.activeMarkets) },
   { label: 'Admins', value: (id) => count(PLANS[id].limits.admins) },
@@ -30,7 +30,7 @@ const COMPARISON: { label: string; value: (plan: PlanId) => string }[] = [
 ];
 
 const count = (value: number) => (value === Infinity ? 'Unlimited' : String(value));
-const yes = (value: boolean) => (value ? '✓' : '—');
+const yes = (value: boolean) => (value ? <Check size={14} /> : '—');
 
 const FAQ: [string, string][] = [
   [

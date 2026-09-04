@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { points, walk, type Slide } from '@/lib/landing';
+import { useBrowse } from './Browse';
+import { Glyph } from './Glyphs';
 import { Bookmark, Chevron, LinkIcon, Mark, Swap } from './Icons';
 import { useReducedMotion } from './motion';
 
@@ -36,8 +38,12 @@ export function Hero({ slides }: { slides: Slide[] }) {
   const [cycle, setCycle] = useState(0);
   // Where along the chart the cursor is, 0..1, or nothing.
   const [cursor, setCursor] = useState<number | null>(null);
+  // "Copied" shows for a moment after the link button.
+  const [copied, setCopied] = useState(false);
   const reduced = useReducedMotion();
+  const b = useBrowse();
   const slide = slides[i];
+  const saved = b.saved.has(slide.cardId);
 
   const series = useMemo(
     () =>
@@ -58,6 +64,33 @@ export function Hero({ slides }: { slides: Slide[] }) {
   const release = () => {
     setHeld(false);
     setCycle((c) => c + 1);
+  };
+
+  const copyLink = async () => {
+    const url = `${location.origin}/#markets`;
+    let done = false;
+    try {
+      await navigator.clipboard.writeText(url);
+      done = true;
+    } catch {
+      // No async clipboard (an old browser, or a page without permission):
+      // the selection-based copy still works from a click handler.
+      const scratch = document.createElement('textarea');
+      scratch.value = url;
+      scratch.setAttribute('readonly', '');
+      scratch.style.position = 'fixed';
+      scratch.style.opacity = '0';
+      document.body.appendChild(scratch);
+      scratch.select();
+      try {
+        done = document.execCommand('copy');
+      } finally {
+        scratch.remove();
+      }
+    }
+    if (!done) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
   };
 
   useEffect(() => {
@@ -97,18 +130,27 @@ export function Hero({ slides }: { slides: Slide[] }) {
       className="pm-hero-col"
       data-held={held}
       style={vars({ '--dwell': `${DWELL}ms` })}
+      tabIndex={0}
+      role="region"
+      aria-roledescription="carousel"
+      aria-label="Featured markets"
       onPointerEnter={() => setHeld(true)}
       onPointerLeave={release}
       onFocus={() => setHeld(true)}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) release();
       }}
+      onKeyDown={(event) => {
+        if (event.target instanceof HTMLInputElement) return;
+        if (event.key === 'ArrowLeft') go(i - 1);
+        if (event.key === 'ArrowRight') go(i + 1);
+      }}
     >
       <article className="pm-hero-card">
         <div key={slide.id} className="pm-hero-swap">
           <div className="pm-hero-head">
             <div className="pm-thumb" style={{ background: slide.tint }}>
-              <span>{slide.emoji}</span>
+              <Glyph name={slide.glyph} size={26} />
             </div>
             <div className="pm-hero-heading">
               <div className="pm-crumb">
@@ -122,10 +164,17 @@ export function Hero({ slides }: { slides: Slide[] }) {
               <h2 className="pm-hero-title">{slide.title}</h2>
             </div>
             <div className="pm-hero-tools">
-              <button aria-label="Copy link">
+              <button type="button" aria-label="Copy link" data-on={copied} onClick={copyLink}>
                 <LinkIcon size={16} />
+                {copied && <span className="pm-tip">Copied</span>}
               </button>
-              <button aria-label="Watchlist">
+              <button
+                type="button"
+                aria-label={saved ? 'Remove from watchlist' : 'Add to watchlist'}
+                aria-pressed={saved}
+                data-on={saved}
+                onClick={() => b.toggleSaved(slide.cardId)}
+              >
                 <Bookmark size={16} />
               </button>
             </div>

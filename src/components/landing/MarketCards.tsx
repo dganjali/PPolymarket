@@ -3,7 +3,9 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import type { Card } from '@/lib/landing';
-import { Bookmark } from './Icons';
+import { useBrowse } from './Browse';
+import { Glyph } from './Glyphs';
+import { Bookmark, Perps } from './Icons';
 import { useReducedMotion } from './motion';
 
 /** The ring is a 270° gauge with the gap at the bottom, on a 100-unit circumference. */
@@ -125,10 +127,16 @@ function Countdown({ seconds }: { seconds: number }) {
 }
 
 function Foot({ card }: { card: Card }) {
-  const [saved, setSaved] = useState(false);
+  const b = useBrowse();
+  const saved = b.saved.has(card.id);
   return (
     <footer className="pm-card-foot">
       <span>{card.volume}</span>
+      {card.live && (
+        <span className="pm-card-live">
+          <Perps size={11} /> live
+        </span>
+      )}
       {card.endsIn ? <Countdown seconds={card.endsIn} /> : <span className="pm-card-ends">{card.ends}</span>}
       <button
         type="button"
@@ -136,7 +144,7 @@ function Foot({ card }: { card: Card }) {
         data-on={saved}
         aria-pressed={saved}
         aria-label={saved ? 'Remove from watchlist' : 'Add to watchlist'}
-        onClick={() => setSaved((s) => !s)}
+        onClick={() => b.toggleSaved(card.id)}
       >
         <Bookmark size={14} />
       </button>
@@ -156,10 +164,10 @@ function Shell({
   children: React.ReactNode;
 }) {
   return (
-    <article className="pm-card" style={vars({ '--i': index })} onPointerMove={spotlight}>
+    <article className="pm-card" style={vars({ '--i': index })} onPointerMove={spotlight} data-live={card.live}>
       <div className="pm-card-top">
         <div className="pm-card-icon" style={{ background: card.tint }}>
-          <span>{card.emoji}</span>
+          <Glyph name={card.glyph} size={19} />
         </div>
         <h3 className="pm-card-title">{card.title}</h3>
         {gauge}
@@ -249,7 +257,7 @@ function VersusCard({ card, index }: { card: Extract<Card, { kind: 'versus' }>; 
         {card.sides.map((s, n) => (
           <div className="pm-row pm-row-vs" key={s.name} style={vars({ '--w': pcts[n] / 100, '--i': n })}>
             <span className="pm-team" style={{ background: s.tint }}>
-              {s.emoji}
+              {s.initial}
             </span>
             <span className="pm-score">{s.score}</span>
             <span className="pm-row-label">{s.name}</span>

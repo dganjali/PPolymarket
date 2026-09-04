@@ -1,53 +1,55 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
-import { Chevron, Combos, Info, Mark, Menu, Perps, Search, Trending } from './Icons';
+import { useEffect, useRef } from 'react';
+import { CATEGORIES } from '@/lib/landing';
+import { useBrowse, revealMarkets } from './Browse';
+import { Chevron, Close, Info, Mark, Menu, Perps, Search, Trending, Volume } from './Icons';
 import { SessionActions } from './Session';
-
-const PINNED = [
-  { label: 'Trending', icon: Trending },
-  { label: 'Parlays', icon: Combos },
-  { label: 'Live', icon: Perps },
-  { label: 'Closing soon' },
-  { label: 'New' },
-];
-
-const CATEGORIES = [
-  'School',
-  'Roommates',
-  'Sports',
-  'Gaming',
-  'Chores',
-  'Trips',
-  'Fantasy',
-  'Group chat',
-  'Grades',
-  'Weather',
-  'Money',
-  'Gym',
-  'Food',
-  'Long shots',
-];
 
 const typing = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 
 export function Header() {
+  const b = useBrowse();
   const rail = useRef<HTMLDivElement>(null);
-  const search = useRef<HTMLInputElement>(null);
-  const [active, setActive] = useState('Trending');
 
   // The `/` hint in the search box is a promise; this keeps it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey || typing(event.target)) return;
       event.preventDefault();
-      search.current?.focus();
+      b.searchRef.current?.focus();
+      b.searchRef.current?.select();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [b.searchRef]);
+
+  const trendingOn = b.sort === 'trending' && !b.category && !b.liveOnly && !b.watching;
+
+  const pinned = [
+    {
+      label: 'Trending',
+      icon: <Trending size={16} />,
+      on: trendingOn,
+      pick: () => b.reset(),
+    },
+    {
+      label: 'Live',
+      icon: <Perps size={16} />,
+      on: b.liveOnly,
+      pick: () => b.setLiveOnly(!b.liveOnly),
+    },
+    { label: 'Closing soon', on: b.sort === 'closing', pick: () => b.setSort(b.sort === 'closing' ? 'trending' : 'closing') },
+    { label: 'New', on: b.sort === 'newest', pick: () => b.setSort(b.sort === 'newest' ? 'trending' : 'newest') },
+    {
+      label: 'Most traded',
+      icon: <Volume size={15} />,
+      on: b.sort === 'biggest',
+      pick: () => b.setSort(b.sort === 'biggest' ? 'trending' : 'biggest'),
+    },
+  ];
 
   return (
     <header className="pm-head">
@@ -59,10 +61,31 @@ export function Header() {
           <span>Minimarket</span>
         </Link>
 
-        <div className="pm-search">
+        <div className="pm-search" data-active={!!b.query}>
           <Search size={17} />
-          <input ref={search} placeholder="Search markets..." aria-label="Search markets" />
-          <kbd>/</kbd>
+          <input
+            ref={b.searchRef}
+            value={b.query}
+            onChange={(event) => b.setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') revealMarkets();
+              if (event.key === 'Escape') {
+                b.setQuery('');
+                event.currentTarget.blur();
+              }
+            }}
+            placeholder="Search markets..."
+            aria-label="Search markets"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {b.query ? (
+            <button type="button" className="pm-search-clear" aria-label="Clear search" onClick={() => b.setQuery('')}>
+              <Close size={14} />
+            </button>
+          ) : (
+            <kbd>/</kbd>
+          )}
         </div>
 
         <div className="pm-head-actions">
@@ -77,26 +100,40 @@ export function Header() {
         </div>
       </div>
 
-      <nav className="pm-cats">
+      <nav className="pm-cats" aria-label="Browse">
         <div className="pm-shell pm-cats-inner">
           <div className="pm-cats-rail" ref={rail}>
-            {PINNED.map(({ label, icon: Icon }) => (
-              <a
-                key={label}
+            {pinned.map((tab) => (
+              <button
+                key={tab.label}
+                type="button"
                 className="pm-cat"
-                data-on={label === active}
-                href="#markets"
-                onClick={() => setActive(label)}
+                data-on={tab.on}
+                aria-pressed={tab.on}
+                onClick={() => {
+                  tab.pick();
+                  revealMarkets();
+                }}
               >
-                {Icon && <Icon size={16} />}
-                {label}
-              </a>
+                {tab.icon}
+                {tab.label}
+              </button>
             ))}
             <span className="pm-cat-sep" />
             {CATEGORIES.map((c) => (
-              <a key={c} className="pm-cat" data-on={c === active} href="#markets" onClick={() => setActive(c)}>
+              <button
+                key={c}
+                type="button"
+                className="pm-cat"
+                data-on={b.category === c}
+                aria-pressed={b.category === c}
+                onClick={() => {
+                  b.setCategory(b.category === c ? null : c);
+                  revealMarkets();
+                }}
+              >
                 {c}
-              </a>
+              </button>
             ))}
           </div>
           <button

@@ -20,6 +20,7 @@ import {
 } from '@/app/actions';
 import { money0, relative } from '@/lib/format';
 import { SubmitButton, Toast } from './ui';
+import { Close } from './Icon';
 
 const PLACE_LABEL = ['', '1st place', '2nd place', '3rd place', '4th place', '5th place',
   '6th place', '7th place', '8th place', '9th place', '10th place'];
@@ -82,7 +83,7 @@ export function PrizeEditor({ slug, prizes }: { slug: string; prizes: string[] }
             onClick={() => setRows((current) => current.filter((_, i) => i !== index))}
             aria-label={`Remove ${PLACE_LABEL[index + 1]}`}
           >
-            ✕
+            <Close size={14} />
           </button>
         </div>
       ))}

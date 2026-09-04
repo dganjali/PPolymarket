@@ -4,6 +4,24 @@
  * plausible to render before a visitor signs in.
  */
 
+/** A drawn mark for a market — see components/landing/Glyphs.tsx. */
+export type GlyphName =
+  | 'grades'
+  | 'dishes'
+  | 'car'
+  | 'grid'
+  | 'paddle'
+  | 'dumbbell'
+  | 'document'
+  | 'controller'
+  | 'bowl'
+  | 'snow'
+  | 'trophy'
+  | 'thermostat'
+  | 'coins'
+  | 'chat'
+  | 'target';
+
 export interface Outcome {
   label: string;
   pct: number;
@@ -12,8 +30,10 @@ export interface Outcome {
 
 export interface Slide {
   id: string;
+  /** The card in the grid this slide is the long form of. Shares its bookmark. */
+  cardId: string;
   crumb: string[];
-  emoji: string;
+  glyph: GlyphName;
   tint: string;
   title: string;
   volume: string;
@@ -29,29 +49,23 @@ export interface Topic {
 interface CardBase {
   id: string;
   title: string;
-  emoji: string;
+  glyph: GlyphName;
   tint: string;
+  /** Which filter chip it answers to. */
+  topic: string;
+  /** Which category in the header rail it sits under. */
+  category: string;
+  /** Play money through it, as a number for sorting and a label for reading. */
+  vol: number;
   volume: string;
+  /** Hours until it closes and hours since it opened, for sorting. */
+  closesIn: number;
+  age: number;
   ends: string;
   /** Seconds left, for a card whose deadline is close enough to count down live. */
   endsIn?: number;
-}
-
-/** One trade on the ticker tape under the header. */
-export interface Fill {
-  who: string;
-  side: 'yes' | 'no';
-  /** The outcome bought — "Yes", or a named option. */
-  label: string;
-  /** In cents. */
-  price: number;
-  market: string;
-}
-
-export interface Step {
-  icon: 'invite' | 'ask' | 'trade';
-  title: string;
-  body: string;
+  /** Something is happening right now: a game in progress, a clock running. */
+  live?: boolean;
 }
 
 export type Card =
@@ -71,8 +85,25 @@ export type Card =
   | (CardBase & { kind: 'rows'; rows: { label: string; pct: number }[] })
   | (CardBase & {
       kind: 'versus';
-      sides: { name: string; emoji: string; tint: string; score: number; pct: number }[];
+      sides: { name: string; initial: string; tint: string; score: number; pct: number }[];
     });
+
+/** One trade on the ticker tape under the header. */
+export interface Fill {
+  who: string;
+  side: 'yes' | 'no';
+  /** The outcome bought — "Yes", or a named option. */
+  label: string;
+  /** In cents. */
+  price: number;
+  market: string;
+}
+
+export interface Step {
+  icon: 'invite' | 'ask' | 'trade';
+  title: string;
+  body: string;
+}
 
 /* ── chart series ──────────────────────────────────────────────────────────
    A seeded walk so the server and the client render the same squiggle. */
@@ -121,12 +152,30 @@ export function points(series: number[], w: number, h: number, padY = 6): string
 
 /* ── content ───────────────────────────────────────────────────────────── */
 
+const TINT = {
+  grades: 'linear-gradient(140deg,#2b3f66,#16233d)',
+  chores: 'linear-gradient(140deg,#1f4f4a,#122b2a)',
+  trip: 'linear-gradient(140deg,#4b3a72,#241c3d)',
+  wordle: 'linear-gradient(140deg,#3d5a34,#1c2a18)',
+  pingpong: 'linear-gradient(140deg,#5c2a4a,#2c1424)',
+  gym: 'linear-gradient(140deg,#4a4438,#22201a)',
+  thesis: 'linear-gradient(140deg,#3a4d63,#1b242f)',
+  fifa: 'linear-gradient(140deg,#2f3a6b,#171d38)',
+  lunch: 'linear-gradient(140deg,#5c4a12,#2b2209)',
+  fantasy: 'linear-gradient(140deg,#5c2f22,#2b1610)',
+  roommates: 'linear-gradient(140deg,#5a3a1e,#2a1b0e)',
+  money: 'linear-gradient(140deg,#1e4d3a,#0f2a1f)',
+  chat: 'linear-gradient(140deg,#3f2e6b,#1e1636)',
+  longshot: 'linear-gradient(140deg,#5a2434,#2c1019)',
+};
+
 export const SLIDES: Slide[] = [
   {
     id: 'mrt',
+    cardId: 'grade',
     crumb: ['Second Period', 'Grades'],
-    emoji: '📐',
-    tint: 'linear-gradient(140deg,#2b3f66,#16233d)',
+    glyph: 'grades',
+    tint: TINT.grades,
     title: "What does Jonathan get on Mr. T's calc test?",
     volume: '$3,240 Vol',
     outcomes: [
@@ -150,9 +199,10 @@ export const SLIDES: Slide[] = [
   },
   {
     id: 'dishes',
+    cardId: 'dishes-card',
     crumb: ['The Apartment', 'Chores'],
-    emoji: '🍽️',
-    tint: 'linear-gradient(140deg,#1f4f4a,#122b2a)',
+    glyph: 'dishes',
+    tint: TINT.chores,
     title: 'Who actually does the dishes on Friday?',
     volume: '$1,880 Vol',
     outcomes: [
@@ -176,9 +226,10 @@ export const SLIDES: Slide[] = [
   },
   {
     id: 'trip',
+    cardId: 'trip-card',
     crumb: ['Ski Trip', 'Logistics'],
-    emoji: '🚗',
-    tint: 'linear-gradient(140deg,#4b3a72,#241c3d)',
+    glyph: 'car',
+    tint: TINT.trip,
     title: 'What time do we actually leave Saturday?',
     volume: '$2,415 Vol',
     outcomes: [
@@ -210,6 +261,7 @@ export const TOPICS: Topic[] = [
   { name: 'Fantasy league', today: '$96 today' },
 ];
 
+/** The filter chips over the grid. Every card's `topic` is one of these. */
 export const FILTERS = [
   'All',
   "Mr. T's test",
@@ -218,11 +270,30 @@ export const FILTERS = [
   'Gym streak',
   'Fantasy',
   'Ping pong',
-  'Exams',
+  'Game night',
   'Group chat',
   'Lunch',
   'Thesis',
   'Roommates',
+  'Money',
+];
+
+/** The category rail in the header. Every card's `category` is one of these. */
+export const CATEGORIES = [
+  'School',
+  'Roommates',
+  'Sports',
+  'Gaming',
+  'Chores',
+  'Trips',
+  'Fantasy',
+  'Group chat',
+  'Grades',
+  'Weather',
+  'Money',
+  'Gym',
+  'Food',
+  'Long shots',
 ];
 
 export const CARDS: Card[] = [
@@ -230,9 +301,14 @@ export const CARDS: Card[] = [
     kind: 'gauge',
     id: 'pass',
     title: "Does Jonathan pass Mr. T's test?",
-    emoji: '📐',
-    tint: 'linear-gradient(140deg,#2b3f66,#16233d)',
+    glyph: 'grades',
+    tint: TINT.grades,
+    topic: "Mr. T's test",
+    category: 'Grades',
+    vol: 3240,
     volume: '$3,240 Vol',
+    closesIn: 60,
+    age: 96,
     ends: 'Ends Friday 3pm',
     pct: 64,
     gaugeLabel: 'Yes',
@@ -241,11 +317,17 @@ export const CARDS: Card[] = [
     kind: 'updown',
     id: 'wordle',
     title: "Marcus's Wordle: over/under 4",
-    emoji: '🟩',
-    tint: 'linear-gradient(140deg,#3d5a34,#1c2a18)',
+    glyph: 'grid',
+    tint: TINT.wordle,
+    topic: 'Group chat',
+    category: 'Gaming',
+    vol: 460,
     volume: '$460 Vol',
+    closesIn: 0.07,
+    age: 1,
     ends: 'Ends in 4m 12s',
     endsIn: 4 * 60 + 12,
+    live: true,
     pct: 57,
     gaugeLabel: 'Over',
     upLabel: 'Over',
@@ -260,9 +342,14 @@ export const CARDS: Card[] = [
     kind: 'rows',
     id: 'grade',
     title: "What does Jonathan get on Mr. T's calc test?",
-    emoji: '📐',
-    tint: 'linear-gradient(140deg,#2b3f66,#16233d)',
+    glyph: 'grades',
+    tint: TINT.grades,
+    topic: "Mr. T's test",
+    category: 'Grades',
+    vol: 3240,
     volume: '$3,240 Vol',
+    closesIn: 60,
+    age: 96,
     ends: 'Ends Friday 3pm',
     rows: [
       { label: 'B (80-89)', pct: 41 },
@@ -274,22 +361,33 @@ export const CARDS: Card[] = [
     kind: 'versus',
     id: 'pingpong',
     title: 'Ping pong final — tonight',
-    emoji: '🏓',
-    tint: 'linear-gradient(140deg,#5c2a4a,#2c1424)',
+    glyph: 'paddle',
+    tint: TINT.pingpong,
+    topic: 'Ping pong',
+    category: 'Sports',
+    vol: 820,
     volume: '$820 Vol',
+    closesIn: 1,
+    age: 30,
     ends: 'Game 3',
+    live: true,
     sides: [
-      { name: 'Marcus', emoji: 'M', tint: '#2f4a7a', score: 2, pct: 61 },
-      { name: 'Priya', emoji: 'P', tint: '#5c3b22', score: 1, pct: 39 },
+      { name: 'Marcus', initial: 'M', tint: '#2f4a7a', score: 2, pct: 61 },
+      { name: 'Priya', initial: 'P', tint: '#5c3b22', score: 1, pct: 39 },
     ],
   },
   {
     kind: 'rows',
     id: 'dishes-card',
     title: 'Who does the dishes on Friday?',
-    emoji: '🍽️',
-    tint: 'linear-gradient(140deg,#1f4f4a,#122b2a)',
+    glyph: 'dishes',
+    tint: TINT.chores,
+    topic: 'Chores',
+    category: 'Chores',
+    vol: 1880,
     volume: '$1,880 Vol',
+    closesIn: 69,
+    age: 200,
     ends: 'Ends Sat 12am',
     rows: [
       { label: 'Marcus', pct: 44 },
@@ -300,10 +398,15 @@ export const CARDS: Card[] = [
   {
     kind: 'gauge',
     id: 'gym',
-    title: 'Dev\'s gym streak hits 30 days?',
-    emoji: '🏋️',
-    tint: 'linear-gradient(140deg,#4a4438,#22201a)',
+    title: "Dev's gym streak hits 30 days?",
+    glyph: 'dumbbell',
+    tint: TINT.gym,
+    topic: 'Gym streak',
+    category: 'Gym',
+    vol: 1105,
     volume: '$1,105 Vol',
+    closesIn: 900,
+    age: 400,
     ends: 'Ends Nov 2',
     pct: 38,
     gaugeLabel: 'Yes',
@@ -312,9 +415,14 @@ export const CARDS: Card[] = [
     kind: 'rows',
     id: 'trip-card',
     title: 'What time do we leave Saturday?',
-    emoji: '🚗',
-    tint: 'linear-gradient(140deg,#4b3a72,#241c3d)',
+    glyph: 'car',
+    tint: TINT.trip,
+    topic: 'Ski trip',
+    category: 'Trips',
+    vol: 2415,
     volume: '$2,415 Vol',
+    closesIn: 77,
+    age: 150,
     ends: 'Ends Sat 8am',
     rows: [
       { label: '11am - 1pm', pct: 38 },
@@ -326,9 +434,14 @@ export const CARDS: Card[] = [
     kind: 'gauge',
     id: 'thesis',
     title: 'Thesis draft sent by Sunday?',
-    emoji: '📄',
-    tint: 'linear-gradient(140deg,#3a4d63,#1b242f)',
+    glyph: 'document',
+    tint: TINT.thesis,
+    topic: 'Thesis',
+    category: 'School',
+    vol: 690,
     volume: '$690 Vol',
+    closesIn: 110,
+    age: 48,
     ends: 'Ends Sun 11:59pm',
     pct: 71,
     gaugeLabel: 'Yes',
@@ -337,22 +450,33 @@ export const CARDS: Card[] = [
     kind: 'versus',
     id: 'fifa',
     title: 'FIFA rematch — Dev vs. Sam',
-    emoji: '🎮',
-    tint: 'linear-gradient(140deg,#2f3a6b,#171d38)',
+    glyph: 'controller',
+    tint: TINT.fifa,
+    topic: 'Game night',
+    category: 'Gaming',
+    vol: 540,
     volume: '$540 Vol',
+    closesIn: 0.3,
+    age: 2,
     ends: '78th minute',
+    live: true,
     sides: [
-      { name: 'Dev', emoji: 'D', tint: '#4a4a4a', score: 2, pct: 55 },
-      { name: 'Sam', emoji: 'S', tint: '#5c3b22', score: 2, pct: 45 },
+      { name: 'Dev', initial: 'D', tint: '#4a4a4a', score: 2, pct: 55 },
+      { name: 'Sam', initial: 'S', tint: '#5c3b22', score: 2, pct: 45 },
     ],
   },
   {
     kind: 'rows',
     id: 'lunch',
     title: 'Where does the group eat on Friday?',
-    emoji: '🌮',
-    tint: 'linear-gradient(140deg,#5c4a12,#2b2209)',
+    glyph: 'bowl',
+    tint: TINT.lunch,
+    topic: 'Lunch',
+    category: 'Food',
+    vol: 312,
     volume: '$312 Vol',
+    closesIn: 63,
+    age: 20,
     ends: 'Ends Fri 6pm',
     rows: [
       { label: 'The usual taco place', pct: 46 },
@@ -364,9 +488,14 @@ export const CARDS: Card[] = [
     kind: 'gauge',
     id: 'snow',
     title: 'Snow on the hill before the trip?',
-    emoji: '🌨️',
-    tint: 'linear-gradient(140deg,#3a4d63,#1b242f)',
+    glyph: 'snow',
+    tint: TINT.thesis,
+    topic: 'Ski trip',
+    category: 'Weather',
+    vol: 980,
     volume: '$980 Vol',
+    closesIn: 1200,
+    age: 300,
     ends: 'Ends Nov 15',
     pct: 68,
     gaugeLabel: 'Yes',
@@ -375,15 +504,87 @@ export const CARDS: Card[] = [
     kind: 'rows',
     id: 'fantasy',
     title: 'Who wins the house fantasy league?',
-    emoji: '🏆',
-    tint: 'linear-gradient(140deg,#5c2f22,#2b1610)',
+    glyph: 'trophy',
+    tint: TINT.fantasy,
+    topic: 'Fantasy',
+    category: 'Fantasy',
+    vol: 1640,
     volume: '$1,640 Vol',
+    closesIn: 2200,
+    age: 800,
     ends: 'Ends Dec 28',
     rows: [
       { label: 'Sam', pct: 36 },
       { label: 'Priya', pct: 31 },
       { label: 'Marcus', pct: 22 },
     ],
+  },
+  {
+    kind: 'gauge',
+    id: 'thermostat',
+    title: 'Does the thermostat war end before December?',
+    glyph: 'thermostat',
+    tint: TINT.roommates,
+    topic: 'Roommates',
+    category: 'Roommates',
+    vol: 275,
+    volume: '$275 Vol',
+    closesIn: 1800,
+    age: 12,
+    ends: 'Ends Dec 1',
+    pct: 22,
+    gaugeLabel: 'Yes',
+  },
+  {
+    kind: 'gauge',
+    id: 'payback',
+    title: 'Sam pays back the $40 by Friday?',
+    glyph: 'coins',
+    tint: TINT.money,
+    topic: 'Money',
+    category: 'Money',
+    vol: 615,
+    volume: '$615 Vol',
+    closesIn: 62,
+    age: 6,
+    ends: 'Ends Friday 5pm',
+    pct: 31,
+    gaugeLabel: 'Yes',
+  },
+  {
+    kind: 'rows',
+    id: 'leaves',
+    title: 'Who leaves the group chat first?',
+    glyph: 'chat',
+    tint: TINT.chat,
+    topic: 'Group chat',
+    category: 'Group chat',
+    vol: 430,
+    volume: '$430 Vol',
+    closesIn: 2300,
+    age: 72,
+    ends: 'Ends Dec 31',
+    rows: [
+      { label: 'Dev', pct: 38 },
+      { label: 'Nobody', pct: 33 },
+      { label: 'Sam', pct: 29 },
+    ],
+  },
+  {
+    kind: 'gauge',
+    id: 'perfect',
+    title: 'Jonathan gets a perfect score on the calc test',
+    glyph: 'target',
+    tint: TINT.longshot,
+    topic: "Mr. T's test",
+    category: 'Long shots',
+    vol: 190,
+    volume: '$190 Vol',
+    closesIn: 60,
+    age: 40,
+    ends: 'Ends Friday 3pm',
+    pct: 4,
+    gaugeLabel: 'Yes',
   },
 ];
 
@@ -426,3 +627,20 @@ export const HOW: Step[] = [
     body: 'Shares priced by an automated market maker. Being right pays $1 a share. Being loud pays nothing.',
   },
 ];
+
+/* ── the sandbox market ────────────────────────────────────────────────────
+   One market a visitor can trade against, in the browser, on the same
+   market maker the app runs. */
+
+export const TRY = {
+  crumb: ['Ski Trip', 'Logistics'],
+  glyph: 'car' as GlyphName,
+  tint: TINT.trip,
+  question: 'Does Dev leave the house before 11am on Saturday?',
+  /** Where the odds stand when the visitor arrives. */
+  probability: 0.34,
+  /** Collateral the pool opens with. Bigger pools move less per dollar. */
+  funding: 500,
+  /** The pretend bankroll a visitor gets to play with. */
+  bankroll: 2500,
+};

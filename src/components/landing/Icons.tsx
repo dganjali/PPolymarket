@@ -58,6 +58,14 @@ export function Perps({ size = 17 }: P) {
   );
 }
 
+export function Volume({ size = 16 }: P) {
+  return (
+    <svg {...base(size)} aria-hidden>
+      <path d="M4 19V11M9.3 19V5M14.7 19v-6M20 19V8" />
+    </svg>
+  );
+}
+
 export function Bookmark({ size = 17 }: P) {
   return (
     <svg {...base(size)} aria-hidden>
@@ -88,6 +96,22 @@ export function Menu({ size = 19 }: P) {
   return (
     <svg {...base(size)} aria-hidden>
       <path d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  );
+}
+
+export function Close({ size = 16 }: P) {
+  return (
+    <svg {...base(size)} aria-hidden>
+      <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
+    </svg>
+  );
+}
+
+export function Check({ size = 16 }: P) {
+  return (
+    <svg {...base(size)} aria-hidden>
+      <path d="M5.5 12.5 10 17l8.5-9.5" />
     </svg>
   );
 }

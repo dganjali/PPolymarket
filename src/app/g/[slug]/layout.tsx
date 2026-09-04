@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { after } from 'next/server';
 import { groupContext } from '@/lib/context';
 import {
+  marketIndex,
   membershipRequestCount,
   memberWorth,
   myGroups,
@@ -10,7 +11,8 @@ import {
 import { sweepClosures, sweepResolutions } from '@/lib/engine';
 import { money, signedMoney } from '@/lib/format';
 import { CreateFab, SidebarNav, TabBar, type NavItem } from '@/components/Nav';
-import { Bell, Plus } from '@/components/Icon';
+import { CommandPalette, PaletteButton, type PaletteLink } from '@/components/CommandPalette';
+import { Bell, Plus, Search } from '@/components/Icon';
 import { PLANS, planOf } from '@/lib/plans';
 import { Avatar } from '@/components/Avatar';
 
@@ -47,11 +49,12 @@ export default async function GroupLayout({
     }
   });
 
-  const [worth, groups, unread, waiting] = await Promise.all([
+  const [worth, groups, unread, waiting, index] = await Promise.all([
     memberWorth(user.id, group, ms.balance),
     myGroups(user.id),
     unreadNotificationCount(user.id),
     isAdmin ? membershipRequestCount(group.id) : Promise.resolve(0),
+    marketIndex(group.id),
   ]);
 
   // myGroups already counts members per group, including this one.
@@ -104,6 +107,19 @@ export default async function GroupLayout({
   const pnlClass = pnl >= 0 ? 'up' : 'down';
   const plan = planOf(group);
 
+  // What the palette can jump to besides markets: the same destinations as the
+  // nav, plus the two actions people reach for from anywhere.
+  const paletteLinks: PaletteLink[] = [
+    { href: `${base}/new`, label: 'Ask a question', hint: 'new market', icon: 'plus' },
+    ...navItems.map<PaletteLink>((item) => ({
+      href: item.href,
+      label: item.label,
+      hint: item.description,
+      icon: item.icon,
+    })),
+    { href: '/groups', label: 'Your groups', hint: 'switch group', icon: 'groups' },
+  ];
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -127,6 +143,10 @@ export default async function GroupLayout({
 
         <div className="sidebar-section">
           <div className="sidebar-title">{group.name}</div>
+          <PaletteButton className="sidebar-search">
+            <Search size={15} />
+            <span>Jump to</span>
+          </PaletteButton>
           <SidebarNav items={navItems} />
           <Link href={`${base}/new`} className="btn btn-primary btn-sm pressable" style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
             <Plus size={15} weight={2.2} />
@@ -167,6 +187,9 @@ export default async function GroupLayout({
               <div className="topbar-sub">{members} members</div>
             </div>
           </Link>
+          <PaletteButton className="topbar-alerts" aria-label="Jump to a market or page" hint={false}>
+            <Search size={17} />
+          </PaletteButton>
           <Link href="/notifications" className="topbar-alerts" aria-label={`Alerts${unread ? `, ${unread} unread` : ''}`}>
             <Bell size={17} />
             {!!unread && <span className="nav-badge mono">{unread > 99 ? '99+' : unread}</span>}
@@ -182,6 +205,7 @@ export default async function GroupLayout({
 
       <CreateFab href={`${base}/new`} listHref={base} />
       <TabBar items={navItems} />
+      <CommandPalette base={base} markets={index} links={paletteLinks} />
     </div>
   );
 }

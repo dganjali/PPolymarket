@@ -321,6 +321,29 @@ export async function marketsByGroup(groupId: number, statuses: string[]): Promi
   );
 }
 
+export interface MarketIndexRow {
+  id: number;
+  question: string;
+  category: string;
+  status: string;
+}
+
+/**
+ * Just enough of every current-season market to find it by name: what the
+ * command palette in the group shell searches. Four narrow columns, so the
+ * whole list rides along with the layout's other queries at no real cost.
+ */
+export async function marketIndex(groupId: number): Promise<MarketIndexRow[]> {
+  return all<MarketIndexRow>(
+    `SELECT m.id, m.question, m.category, m.status
+       FROM markets m JOIN groups g ON g.id = m.group_id
+      WHERE m.group_id = ? AND m.season_number = g.current_season
+        AND m.status IN ('open', 'closed', 'resolving', 'resolved')
+      ORDER BY (m.status = 'open') DESC, m.volume DESC, m.id DESC`,
+    groupId,
+  );
+}
+
 export function reserves(m: Pick<MarketRow, 'yes_reserve' | 'no_reserve'>): Reserves {
   return { yes: m.yes_reserve, no: m.no_reserve };
 }
