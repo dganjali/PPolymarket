@@ -8,6 +8,10 @@ import { stepPath, type Point } from '@/lib/chart';
  * card on the group's landing screen pulled the full interactive chart (four
  * hundred lines, hooks, pointer handling and the icon set) into the browser to draw
  * a static SVG path. Nothing here needs the client: given points, it is a string.
+ *
+ * It draws itself in on arrival: `pathLength={1}` normalises the stroke to one
+ * unit so a single CSS keyframe (mm-draw, in globals.css) can run the dash offset
+ * from 1 to 0 for any path, whatever its real length.
  */
 export function Spark({
   points,
@@ -35,8 +39,16 @@ export function Spark({
 
   return (
     <svg width={width} height={height} style={{ display: 'block', overflow: 'visible' }} aria-hidden>
-      <path d={stepPath(points, x, y)} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" />
-      <circle cx={x(to)} cy={y(points[points.length - 1].v)} r={2} fill={color} />
+      <path
+        className="spark-line"
+        d={stepPath(points, x, y)}
+        pathLength={1}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+      />
+      <circle className="spark-end" cx={x(to)} cy={y(points[points.length - 1].v)} r={2} fill={color} />
     </svg>
   );
 }

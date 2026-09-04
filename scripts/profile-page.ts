@@ -18,6 +18,7 @@ import {
   membershipRequestCount,
   membershipRequests,
   myGroups,
+  optionsByMarket,
   standings,
   unreadNotificationCount,
 } from '../src/lib/data';
@@ -75,6 +76,10 @@ async function homePage(ctx: Ctx) {
   return Promise.all([
     marketsPromise,
     marketsPromise.then(sparkSeriesFor),
+    // The cards' outcomes, one query for the grid — see g/[slug]/page.tsx.
+    marketsPromise.then((rows) =>
+      rows.some((m) => m.market_type === 'categorical') ? optionsByMarket(row.id, row.current_season) : new Map(),
+    ),
     standings(row.id, row.starting_balance),
     groupPrizes(row.id),
     events(row.id, 5),

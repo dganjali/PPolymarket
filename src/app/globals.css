@@ -181,6 +181,16 @@ textarea { resize: vertical; line-height: 1.45; }
 @keyframes mm-sheen { from { background-position: -160% 0 } to { background-position: 260% 0 } }
 @keyframes mm-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
 @keyframes mm-halo { 0% { transform: scale(1); opacity: .55 } 70%, 100% { transform: scale(2.6); opacity: 0 } }
+/* A bar growing into its width, and a line drawing itself in. Both are
+   from-only keyframes: the "to" is whatever the element's own style says, so
+   one rule serves every width and every path. */
+@keyframes mm-grow { from { width: 0 } }
+@keyframes mm-draw { from { stroke-dashoffset: 1 } to { stroke-dashoffset: 0 } }
+@keyframes mm-confetti {
+  0% { transform: translate(-50%, -50%) rotate(0deg); opacity: 1 }
+  70% { opacity: 1 }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy) + 130px)) rotate(var(--spin)); opacity: 0 }
+}
 
 /* ── focus ────────────────────────────────────────────────────────────────────
    One focus treatment for the whole app. `:focus-visible` only, so a mouse
@@ -199,9 +209,12 @@ textarea { resize: vertical; line-height: 1.45; }
 .pressable { transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out); }
 .pressable:active:not(:disabled) { transform: scale(0.975); }
 
-/* A card that lifts under the cursor. */
+/* A card that lifts under the cursor, with a thread of accent light around it. */
 .liftable { transition: transform var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out); }
-.liftable:hover { transform: translateY(-2px); border-color: var(--line-3); box-shadow: var(--lift-2); }
+.liftable:hover {
+  transform: translateY(-2px); border-color: var(--line-3);
+  box-shadow: var(--lift-2), 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
 
 /* Entrance for a section. `.stagger > *` walks its children in behind it.
    Both run once on mount: they are animations, not transitions, so a re-render
@@ -256,6 +269,20 @@ textarea { resize: vertical; line-height: 1.45; }
   display: block; height: 100%; border-radius: inherit;
   background: var(--c-1);
   transition: width var(--dur-slow) var(--ease-out);
+  /* Grows into place on arrival; later changes take the transition above. */
+  animation: mm-grow var(--dur-lazy) var(--ease-out) backwards;
+}
+
+/* The sparkline on a market card draws itself in, tip last. */
+.spark-line { stroke-dasharray: 1; animation: mm-draw 700ms var(--ease-out) backwards; }
+.spark-end { animation: mm-in var(--dur-base) var(--ease-out) 640ms backwards; }
+
+/* Paper, from the trade ticket. Positioned by the component; each piece flies
+   on its own --dx/--dy and is gone in a second. */
+.confetti { position: fixed; z-index: 95; width: 0; height: 0; pointer-events: none; }
+.confetti > i {
+  position: absolute; left: 0; top: 0; border-radius: 2px;
+  animation: mm-confetti 1.15s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
 }
 
 /* ── primitives ───────────────────────────────────────────────────────────── */

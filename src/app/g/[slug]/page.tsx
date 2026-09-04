@@ -1,6 +1,15 @@
 import Link from 'next/link';
 import { groupContext } from '@/lib/context';
-import { CATEGORIES, events, groupPrizes, marketsByGroup, membershipRequests, standings } from '@/lib/data';
+import {
+  CATEGORIES,
+  events,
+  groupPrizes,
+  marketsByGroup,
+  membershipRequests,
+  optionsByMarket,
+  standings,
+  type MarketOptionRow,
+} from '@/lib/data';
 import { sparkSeriesFor } from '@/lib/history';
 import { money0, relative, signedMoney } from '@/lib/format';
 import { MarketCard } from '@/components/MarketCard';
@@ -31,11 +40,20 @@ export default async function HomePage({
   const visiblePromise = marketsPromise.then((rows) =>
     cat === 'All' ? rows : rows.filter((m) => m.category === cat),
   );
+  // Every multiple-choice market's outcomes in one query, chained the same way,
+  // so the cards below never have to ask for their own — and nothing at all is
+  // fetched for a grid with no such market in it.
+  const optionsPromise = visiblePromise.then((rows) =>
+    rows.some((m) => m.market_type === 'categorical')
+      ? optionsByMarket(group.id, group.current_season)
+      : new Map<number, MarketOptionRow[]>(),
+  );
 
-  const [all, markets, series, rows, prizes, feed, joinRequests] = await Promise.all([
+  const [all, markets, series, optionsFor, rows, prizes, feed, joinRequests] = await Promise.all([
     marketsPromise,
     visiblePromise,
     visiblePromise.then(sparkSeriesFor),
+    optionsPromise,
     standings(group.id, group.starting_balance),
     groupPrizes(group.id),
     events(group.id, 5),
@@ -116,9 +134,15 @@ export default async function HomePage({
         <Link href={`${base}?show=resolved`} className="chip" data-on={show === 'resolved'}>Done</Link>
       </section>
 
-      <section className="market-grid" style={{ display: 'grid', gap: 'var(--s-2)' }}>
+      <section className="market-grid stagger" style={{ display: 'grid', gap: 'var(--s-2)' }}>
         {markets.map((m) => (
-          <MarketCard key={m.id} market={m} points={series.get(m.id) ?? []} base={base} />
+          <MarketCard
+            key={m.id}
+            market={m}
+            points={series.get(m.id) ?? []}
+            base={base}
+            options={optionsFor.get(m.id)}
+          />
         ))}
       </section>
 

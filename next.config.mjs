@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // One header fewer on every response, and one less thing to fingerprint.
+  poweredByHeader: false,
   // node:sqlite is a core module; keep it out of the server bundle graph.
   serverExternalPackages: [],
   experimental: {

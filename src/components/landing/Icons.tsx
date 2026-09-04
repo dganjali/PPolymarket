@@ -138,3 +138,40 @@ export function Flame({ size = 13 }: P) {
     </svg>
   );
 }
+
+/* ── how-it-works steps ────────────────────────────────────────────────── */
+
+export function Invite({ size = 20 }: P) {
+  return (
+    <svg {...base(size)} aria-hidden>
+      <circle cx="10" cy="8" r="3.4" />
+      <path d="M4 19.5a6 6 0 0 1 12 0" />
+      <path d="M18.5 8v6M15.5 11h6" />
+    </svg>
+  );
+}
+
+export function Ask({ size = 20 }: P) {
+  return (
+    <svg {...base(size)} aria-hidden>
+      <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 3.5V17H6.5A2.5 2.5 0 0 1 4 14.5z" />
+      <path d="M9.8 9.2a2.2 2.2 0 1 1 3 2c-.5.3-.8.7-.8 1.2v.3M12 14.6h.01" />
+    </svg>
+  );
+}
+
+export function Trade({ size = 20 }: P) {
+  return (
+    <svg {...base(size)} aria-hidden>
+      <rect x="3.5" y="4" width="17" height="16" rx="2.5" />
+      <path d="M7 15l3.2-3.4 2.6 2.2L17 9.5" />
+      <path d="M14.2 9.5H17v2.8" />
+    </svg>
+  );
+}
+
+export function StepIcon({ kind, size = 20 }: P & { kind: 'invite' | 'ask' | 'trade' }) {
+  if (kind === 'invite') return <Invite size={size} />;
+  if (kind === 'ask') return <Ask size={size} />;
+  return <Trade size={size} />;
+}

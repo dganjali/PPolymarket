@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { priceYes } from '@/lib/amm';
-import { wholePercentages } from '@/lib/categorical';
+import { categoricalPrices, wholePercentages } from '@/lib/categorical';
 import { colorFor, recentDelta, type Point } from '@/lib/chart';
-import { optionsWithPrices, type MarketRow } from '@/lib/data';
+import { categoricalState, marketOptions, type MarketOptionRow, type MarketRow } from '@/lib/data';
 import { centsLabel, relative, signedCents, volLabel } from '@/lib/format';
 import { MarketGlyph } from './MarketGlyph';
 import { Spark } from './Spark';
@@ -18,10 +18,19 @@ export async function MarketCard({
   market,
   points,
   base,
+  options: preloaded,
 }: {
   market: MarketRow;
   points: Point[];
   base: string;
+  /**
+   * The outcomes of a multiple-choice market, when the screen already has them.
+   * The group's home page loads every market's options in one query and hands
+   * each card its own; without that, a grid of eight such markets was eight
+   * extra round trips to the database, one per card, before anything painted.
+   * Left out, the card fetches its own — correct anywhere, just slower.
+   */
+  options?: MarketOptionRow[];
 }) {
   const href = `${base}/m/${market.id}`;
   const open = market.status === 'open';
@@ -39,9 +48,11 @@ export async function MarketCard({
             : market.status;
 
   if (market.market_type === 'categorical') {
-    const options = (await optionsWithPrices(market)).map((option) => ({
+    const rows = preloaded ?? (await marketOptions(market.id));
+    const live = categoricalPrices(categoricalState(market, rows));
+    const options = rows.map((option, index) => ({
       ...option,
-      price: market.status === 'resolved' ? (String(option.id) === market.outcome ? 1 : 0) : option.price,
+      price: market.status === 'resolved' ? (String(option.id) === market.outcome ? 1 : 0) : live[index],
     }));
     const whole = wholePercentages(options.map((option) => option.price));
     const outcomeLabel = options.find((option) => String(option.id) === market.outcome)?.label;

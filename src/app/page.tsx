@@ -1,28 +1,38 @@
 import Link from 'next/link';
-import { currentUser } from '@/lib/auth';
-import { CARDS, FILTERS, SLIDES, TOPICS } from '@/lib/landing';
+import { CARDS, FILTERS, HOW, SLIDES, TAPE, TOPICS } from '@/lib/landing';
 import { Filters } from '@/components/landing/Filters';
 import { Header } from '@/components/landing/Header';
 import { Hero } from '@/components/landing/Hero';
 import { MarketCard } from '@/components/landing/MarketCards';
 import { Rail } from '@/components/landing/Rail';
-import { Bookmark, Search, Sliders } from '@/components/landing/Icons';
+import { Tape } from '@/components/landing/Tape';
+import { Bookmark, Search, Sliders, StepIcon } from '@/components/landing/Icons';
 import './landing.css';
 
-export default async function LandingPage() {
-  const user = await currentUser();
-
+/**
+ * The public landing page.
+ *
+ * Deliberately reads nothing per request — no cookie, no database — so Next
+ * prerenders it once at build time and every visit is served as static HTML
+ * from the edge. The one thing that depends on who is looking (the sign-in
+ * corner of the header) is resolved in the browser after first paint, by
+ * `SessionActions`. Adding `cookies()` or `headers()` anywhere in this tree
+ * would silently turn the whole route dynamic again; the build's route table
+ * marks it ○ when it is static.
+ */
+export default function LandingPage() {
   return (
     <div className="pm">
+      <div className="pm-aurora" aria-hidden>
+        <span className="pm-aurora-a" />
+        <span className="pm-aurora-b" />
+        <span className="pm-aurora-c" />
+      </div>
+
       <Header />
+      <Tape items={TAPE} />
 
       <main className="pm-shell pm-main">
-        {user && (
-          <Link href="/groups" className="pm-resume">
-            Signed in as {user.name} — back to your groups →
-          </Link>
-        )}
-
         <section className="pm-hero">
           <Hero slides={SLIDES} />
           <Rail topics={TOPICS} />
@@ -30,7 +40,12 @@ export default async function LandingPage() {
 
         <section className="pm-markets" id="markets">
           <div className="pm-markets-head">
-            <h2>All markets</h2>
+            <h2>
+              All markets
+              <span className="pm-live-pill">
+                <span className="live" /> live
+              </span>
+            </h2>
             <div className="pm-markets-tools">
               <button aria-label="Search markets">
                 <Search size={17} />
@@ -47,26 +62,62 @@ export default async function LandingPage() {
           <Filters items={FILTERS} />
 
           <div className="pm-grid">
-            {CARDS.map((card) => (
-              <MarketCard key={card.id} card={card} />
+            {CARDS.map((card, index) => (
+              <MarketCard key={card.id} card={card} index={index} />
             ))}
           </div>
         </section>
 
-        <section className="pm-cta" id="how">
-          <h2>Run the same thing with your friends.</h2>
-          <p>
-            Minimarket gives a group its own bankroll, its own markets and its own bragging rights.
-            Play money, real prices — an automated market maker sets the odds off what people
-            actually buy.
-          </p>
-          <div className="pm-cta-btns">
-            <Link href="/signup" className="pm-btn pm-btn-blue pm-btn-lg">
-              Create an account
-            </Link>
-            <Link href="/join" className="pm-btn pm-btn-ghost pm-btn-lg">
-              Join with an invite code
-            </Link>
+        <section className="pm-how" id="how">
+          <div className="pm-how-head">
+            <span className="pm-eyebrow">How it works</span>
+            <h2>Thirty seconds from group chat to market.</h2>
+          </div>
+          <ol className="pm-steps">
+            {HOW.map((step, n) => (
+              <li key={step.title} className="pm-step" style={{ '--i': n } as React.CSSProperties}>
+                <span className="pm-step-n">0{n + 1}</span>
+                <span className="pm-step-icon">
+                  <StepIcon kind={step.icon} />
+                </span>
+                <h3>{step.title}</h3>
+                <p>{step.body}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className="pm-cta">
+          <div className="pm-cta-glow" aria-hidden />
+          <div className="pm-cta-body">
+            <h2>Run the same thing with your friends.</h2>
+            <p>
+              Minimarket gives a group its own bankroll, its own markets and its own bragging rights.
+              Play money, real prices — an automated market maker sets the odds off what people
+              actually buy.
+            </p>
+            <div className="pm-cta-btns">
+              <Link href="/signup" className="pm-btn pm-btn-blue pm-btn-lg pm-btn-shine">
+                Create an account
+              </Link>
+              <Link href="/join" className="pm-btn pm-btn-ghost pm-btn-lg">
+                Join with an invite code
+              </Link>
+            </div>
+          </div>
+          <div className="pm-cta-stats" aria-hidden>
+            <div>
+              <b>$0</b>
+              <span>ever at stake</span>
+            </div>
+            <div>
+              <b>1.5%</b>
+              <span>fee stays in the pool</span>
+            </div>
+            <div>
+              <b>30s</b>
+              <span>to open a market</span>
+            </div>
           </div>
         </section>
 
@@ -76,6 +127,7 @@ export default async function LandingPage() {
             <Link href="/login">Log in</Link>
             <Link href="/signup">Sign up</Link>
             <Link href="/join">Join a group</Link>
+            <Link href="/pricing">Pricing</Link>
           </span>
         </footer>
       </main>

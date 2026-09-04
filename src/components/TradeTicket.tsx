@@ -1,10 +1,11 @@
 'use client';
 
-import { useActionState, useEffect, useMemo, useState } from 'react';
+import { useActionState, useEffect, useMemo, useRef, useState } from 'react';
 import { tradeAction, type FormState } from '@/app/actions';
 import { quoteBuy, quoteSell, type Reserves, type Side } from '@/lib/amm';
 import { categoricalPrices, quoteCategoricalBuy, quoteCategoricalSell } from '@/lib/categorical';
 import { centsLabel, money, pctLabel, shares as fmtShares, signedCents } from '@/lib/format';
+import { Confetti } from './Confetti';
 import { MarketGlyph } from './MarketGlyph';
 import { Chevron, Info } from './Icon';
 import { SubmitButton, Toast } from './ui';
@@ -79,6 +80,8 @@ export function TradeTicket({
   const [amount, setAmount] = useState('');
   const [qty, setQty] = useState('');
   const [picking, setPicking] = useState(false);
+  // Where the paper comes from when a fill lands.
+  const go = useRef<HTMLDivElement>(null);
 
   const index = Math.max(0, legs.findIndex((leg) => leg.key === activeKey));
   const leg = legs[index] ?? legs[0];
@@ -356,13 +359,15 @@ export function TradeTicket({
             </>
           )}
 
-          <SubmitButton
-            className={`btn tt-go pressable ${!ready ? '' : book.kind === 'binary' && leg?.side === 'NO' ? 'btn-no' : 'btn-primary'}`}
-            disabled={!ready}
-            pendingLabel="Filling…"
-          >
-            {label}
-          </SubmitButton>
+          <div ref={go} className="tt-go-wrap">
+            <SubmitButton
+              className={`btn tt-go pressable ${!ready ? '' : book.kind === 'binary' && leg?.side === 'NO' ? 'btn-no' : 'btn-primary'}`}
+              disabled={!ready}
+              pendingLabel="Filling…"
+            >
+              {label}
+            </SubmitButton>
+          </div>
 
           {state.error && <div className="error">{state.error}</div>}
 
@@ -398,6 +403,7 @@ export function TradeTicket({
       </div>
 
       <Toast message={state.ok} />
+      <Confetti burst={state.ok} anchor={go} />
     </>
   );
 }

@@ -34,10 +34,38 @@ const plexMono = IBM_Plex_Mono({
   variable: '--font-mono',
 });
 
+const DESCRIPTION =
+  'Play-money prediction markets for invite-only groups. Real market pricing, nothing at stake beyond whatever your admin puts up.';
+
+/**
+ * Absolute URLs in social cards need an origin. APP_ORIGIN is the one the app
+ * already uses for sign-in links; when it is unset Next falls back to VERCEL_URL
+ * in production and localhost in development, which is the right answer in both.
+ */
+function metadataBase(): URL | undefined {
+  try {
+    return process.env.APP_ORIGIN ? new URL(process.env.APP_ORIGIN) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const metadata: Metadata = {
+  metadataBase: metadataBase(),
   title: 'Minimarket — private prediction markets',
-  description:
-    'Play-money prediction markets for invite-only groups. Real market pricing, nothing at stake beyond whatever your admin puts up.',
+  description: DESCRIPTION,
+  applicationName: 'Minimarket',
+  openGraph: {
+    type: 'website',
+    siteName: 'Minimarket',
+    title: 'Minimarket — private prediction markets',
+    description: DESCRIPTION,
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Minimarket — private prediction markets',
+    description: DESCRIPTION,
+  },
 };
 
 export const viewport: Viewport = {

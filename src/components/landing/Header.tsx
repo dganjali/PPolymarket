@@ -1,8 +1,17 @@
 'use client';
 
 import Link from 'next/link';
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Chevron, Combos, Info, Mark, Menu, Perps, Search, Trending } from './Icons';
+import { SessionActions } from './Session';
+
+const PINNED = [
+  { label: 'Trending', icon: Trending },
+  { label: 'Parlays', icon: Combos },
+  { label: 'Live', icon: Perps },
+  { label: 'Closing soon' },
+  { label: 'New' },
+];
 
 const CATEGORIES = [
   'School',
@@ -21,20 +30,38 @@ const CATEGORIES = [
   'Long shots',
 ];
 
+const typing = (target: EventTarget | null) =>
+  target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+
 export function Header() {
   const rail = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const [active, setActive] = useState('Trending');
+
+  // The `/` hint in the search box is a promise; this keeps it.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey || typing(event.target)) return;
+      event.preventDefault();
+      search.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   return (
     <header className="pm-head">
       <div className="pm-shell pm-head-row">
         <Link href="/" className="pm-logo">
-          <Mark size={26} />
+          <span className="pm-logo-mark">
+            <Mark size={26} />
+          </span>
           <span>Minimarket</span>
         </Link>
 
         <div className="pm-search">
           <Search size={17} />
-          <input placeholder="Search markets..." aria-label="Search markets" />
+          <input ref={search} placeholder="Search markets..." aria-label="Search markets" />
           <kbd>/</kbd>
         </div>
 
@@ -43,12 +70,7 @@ export function Header() {
             <Info size={15} />
             How it works
           </a>
-          <Link href="/login" className="pm-btn pm-btn-ghost">
-            Log in
-          </Link>
-          <Link href="/signup" className="pm-btn pm-btn-blue">
-            Sign up
-          </Link>
+          <SessionActions />
           <button className="pm-icon-btn" aria-label="Menu">
             <Menu />
           </button>
@@ -58,27 +80,21 @@ export function Header() {
       <nav className="pm-cats">
         <div className="pm-shell pm-cats-inner">
           <div className="pm-cats-rail" ref={rail}>
-            <a className="pm-cat" data-on href="#markets">
-              <Trending size={16} />
-              Trending
-            </a>
-            <a className="pm-cat" href="#markets">
-              <Combos size={16} />
-              Parlays
-            </a>
-            <a className="pm-cat" href="#markets">
-              <Perps size={16} />
-              Live
-            </a>
-            <a className="pm-cat" href="#markets">
-              Closing soon
-            </a>
-            <a className="pm-cat" href="#markets">
-              New
-            </a>
+            {PINNED.map(({ label, icon: Icon }) => (
+              <a
+                key={label}
+                className="pm-cat"
+                data-on={label === active}
+                href="#markets"
+                onClick={() => setActive(label)}
+              >
+                {Icon && <Icon size={16} />}
+                {label}
+              </a>
+            ))}
             <span className="pm-cat-sep" />
             {CATEGORIES.map((c) => (
-              <a key={c} className="pm-cat" href="#markets">
+              <a key={c} className="pm-cat" data-on={c === active} href="#markets" onClick={() => setActive(c)}>
                 {c}
               </a>
             ))}

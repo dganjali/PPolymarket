@@ -88,7 +88,7 @@ export const Chevron = ({ size = 16, weight = 1.7, dir = 'right', className }: I
   <svg
     {...base(size, weight)}
     className={className}
-    style={{ transform: `rotate(${{ right: 0, down: 90, left: 180, up: 270 }[dir]}deg)`, transition: 'transform var(--dur-2) var(--ease-out)' }}
+    style={{ transform: `rotate(${{ right: 0, down: 90, left: 180, up: 270 }[dir]}deg)`, transition: 'transform var(--dur-base) var(--ease-out)' }}
   >
     <path d="M9.5 5.5 16 12l-6.5 6.5" />
   </svg>

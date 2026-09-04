@@ -33,6 +33,25 @@ interface CardBase {
   tint: string;
   volume: string;
   ends: string;
+  /** Seconds left, for a card whose deadline is close enough to count down live. */
+  endsIn?: number;
+}
+
+/** One trade on the ticker tape under the header. */
+export interface Fill {
+  who: string;
+  side: 'yes' | 'no';
+  /** The outcome bought — "Yes", or a named option. */
+  label: string;
+  /** In cents. */
+  price: number;
+  market: string;
+}
+
+export interface Step {
+  icon: 'invite' | 'ask' | 'trade';
+  title: string;
+  body: string;
 }
 
 export type Card =
@@ -40,8 +59,6 @@ export type Card =
       kind: 'gauge';
       pct: number;
       gaugeLabel: string;
-      yes: string;
-      no: string;
     })
   | (CardBase & {
       kind: 'updown';
@@ -219,8 +236,6 @@ export const CARDS: Card[] = [
     ends: 'Ends Friday 3pm',
     pct: 64,
     gaugeLabel: 'Yes',
-    yes: 'Yes 64¢',
-    no: 'No 36¢',
   },
   {
     kind: 'updown',
@@ -230,6 +245,7 @@ export const CARDS: Card[] = [
     tint: 'linear-gradient(140deg,#3d5a34,#1c2a18)',
     volume: '$460 Vol',
     ends: 'Ends in 4m 12s',
+    endsIn: 4 * 60 + 12,
     pct: 57,
     gaugeLabel: 'Over',
     upLabel: 'Over',
@@ -291,8 +307,6 @@ export const CARDS: Card[] = [
     ends: 'Ends Nov 2',
     pct: 38,
     gaugeLabel: 'Yes',
-    yes: 'Yes 38¢',
-    no: 'No 62¢',
   },
   {
     kind: 'rows',
@@ -318,8 +332,6 @@ export const CARDS: Card[] = [
     ends: 'Ends Sun 11:59pm',
     pct: 71,
     gaugeLabel: 'Yes',
-    yes: 'Yes 71¢',
-    no: 'No 29¢',
   },
   {
     kind: 'versus',
@@ -358,8 +370,6 @@ export const CARDS: Card[] = [
     ends: 'Ends Nov 15',
     pct: 68,
     gaugeLabel: 'Yes',
-    yes: 'Yes 68¢',
-    no: 'No 32¢',
   },
   {
     kind: 'rows',
@@ -374,5 +384,45 @@ export const CARDS: Card[] = [
       { label: 'Priya', pct: 31 },
       { label: 'Marcus', pct: 22 },
     ],
+  },
+];
+
+/* ── the tape ──────────────────────────────────────────────────────────────
+   Recent fills, scrolling under the header. Invented, like everything else
+   here, but shaped like the real event feed so the page reads as a live
+   market rather than a brochure. */
+
+export const TAPE: Fill[] = [
+  { who: 'Priya', side: 'yes', label: 'B (80-89)', price: 41, market: "Mr. T's test" },
+  { who: 'Marcus', side: 'no', label: 'Nobody', price: 73, market: 'Friday dishes' },
+  { who: 'Dev', side: 'yes', label: 'Over', price: 57, market: "Marcus's Wordle" },
+  { who: 'Sam', side: 'yes', label: '11am - 1pm', price: 38, market: 'Saturday departure' },
+  { who: 'Elena', side: 'no', label: 'Yes', price: 62, market: 'Gym streak' },
+  { who: 'Kai', side: 'yes', label: 'Marcus', price: 61, market: 'Ping pong final' },
+  { who: 'Tess', side: 'yes', label: 'Yes', price: 71, market: 'Thesis by Sunday' },
+  { who: 'Loic', side: 'no', label: 'Sam', price: 64, market: 'Fantasy league' },
+  { who: 'Nadia', side: 'yes', label: 'The usual taco place', price: 46, market: 'Friday lunch' },
+  { who: 'Owen', side: 'yes', label: 'Yes', price: 68, market: 'Snow before the trip' },
+  { who: 'Sofia', side: 'no', label: 'Dev', price: 45, market: 'FIFA rematch' },
+  { who: 'Jonathan', side: 'yes', label: 'A (90+)', price: 18, market: "Mr. T's test" },
+];
+
+/* ── how it works ──────────────────────────────────────────────────────── */
+
+export const HOW: Step[] = [
+  {
+    icon: 'invite',
+    title: 'Start a group',
+    body: 'One invite link. Everyone who joins gets the same play-money bankroll, so nobody buys their way to the top.',
+  },
+  {
+    icon: 'ask',
+    title: 'Ask a question',
+    body: 'Anything with a clear answer by a clear date. Does Dev leave before 11? Who does the dishes? Thirty seconds to post.',
+  },
+  {
+    icon: 'trade',
+    title: 'Let the odds argue',
+    body: 'Shares priced by an automated market maker. Being right pays $1 a share. Being loud pays nothing.',
   },
 ];

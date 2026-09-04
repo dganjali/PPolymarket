@@ -41,7 +41,7 @@ export function Rail({ topics }: { topics: Topic[] }) {
         </a>
         <ol>
           {topics.map((t, n) => (
-            <li key={t.name}>
+            <li key={t.name} style={{ '--i': n } as React.CSSProperties}>
               <a href="#markets">
                 <span className="pm-topic-rank">{n + 1}</span>
                 <span className="pm-topic-name">{t.name}</span>
