@@ -94,7 +94,7 @@ export default function Image() {
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, marginTop: 18 }}>
               <span style={{ fontSize: 56, fontWeight: 700, color: '#4ec97f', lineHeight: 1 }}>76%</span>
-              <span style={{ fontSize: 18, color: '#8a8a8a', paddingBottom: 8 }}>Marcus ▲ 12</span>
+              <span style={{ fontSize: 18, color: '#8a8a8a', paddingBottom: 8 }}>Marcus +12 today</span>
             </div>
             <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ marginTop: 18 }}>
               <polygon points={`0,${h} ${pts} ${w},${h}`} fill="rgba(78,201,127,0.16)" />
