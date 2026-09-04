@@ -14,7 +14,7 @@ export const contentType = 'image/png';
 const LINE = [42, 44, 41, 47, 45, 52, 50, 56, 53, 58, 61, 57, 63, 66, 64, 70, 68, 73, 71, 76];
 
 export default function Image() {
-  const w = 520;
+  const w = 452;
   const h = 170;
   const pts = LINE.map((v, n) => `${(n / (LINE.length - 1)) * w},${h - (v / 100) * h}`).join(' ');
 
